@@ -1,0 +1,37 @@
+{
+  "name": "devrank-uz-backend",
+  "version": "3.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.js",
+    "start": "tsx src/server.js",
+    "prisma:generate": "prisma generate",
+    "prisma:push": "prisma db push",
+    "prisma:seed": "prisma db seed",
+    "prisma:cleanup-demo": "tsx prisma/cleanup-demo.js",
+    "prisma:studio": "prisma studio"
+  },
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "dependencies": {
+    "@google/genai": "latest",
+    "@prisma/adapter-pg": "latest",
+    "@prisma/client": "^7.9.1",
+    "bcryptjs": "latest",
+    "cors": "latest",
+    "dotenv": "^17.4.2",
+    "express": "latest",
+    "express-rate-limit": "latest",
+    "helmet": "latest",
+    "jsonwebtoken": "latest",
+    "multer": "latest",
+    "pg": "latest",
+    "prisma": "^7.9.1",
+    "zod": "latest"
+  },
+  "devDependencies": {
+    "tsx": "latest"
+  }
+}
