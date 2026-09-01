@@ -3,27 +3,21 @@
   "version": "3.0.0",
   "private": true,
   "type": "module",
-
-"scripts": {
-    "dev": "tsx watch src/server.js",
-    "build": "prisma generate",
-    "start": "node src/server.js",
+  "scripts": {
+    "dev": "node --watch src/server.js",
+    "start": "npx prisma generate && node src/server.js",
     "postinstall": "prisma generate",
     "prisma:generate": "prisma generate",
     "prisma:push": "prisma db push",
     "prisma:seed": "prisma db seed",
-    "prisma:cleanup-demo": "tsx prisma/cleanup-demo.js",
     "prisma:studio": "prisma studio"
   },
-
   "engines": {
     "node": ">=20.19.0"
   },
-
   "dependencies": {
     "@google/genai": "latest",
-    "@prisma/adapter-pg": "latest",
-    "@prisma/client": "7.10.0",
+    "@prisma/client": "6.19.2",
     "bcryptjs": "latest",
     "cors": "latest",
     "dotenv": "^17.4.2",
@@ -33,8 +27,7 @@
     "jsonwebtoken": "latest",
     "multer": "latest",
     "pg": "latest",
-    "prisma": "7.10.0",
-    "tsx": "latest",
+    "prisma": "6.19.2",
     "zod": "latest"
   }
 }
