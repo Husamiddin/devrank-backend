@@ -4,10 +4,10 @@
   "private": true,
   "type": "module",
 
-  "scripts": {
+"scripts": {
     "dev": "tsx watch src/server.js",
     "build": "prisma generate",
-    "start": "tsx src/server.js",
+    "start": "node src/server.js",
     "postinstall": "prisma generate",
     "prisma:generate": "prisma generate",
     "prisma:push": "prisma db push",
