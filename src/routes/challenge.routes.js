@@ -19,7 +19,6 @@ const submitLimiter = rateLimit({
   message: { message: "Juda ko‘p submission yuborildi. Bir ozdan keyin yana urinib ko‘ring." }
 });
 
-// GET /api/challenges?category=web&difficulty=easy
 r.get("/challenges", auth, async (req, res, next) => {
   try {
     const category = String(req.query.category || "web").toLowerCase();
@@ -30,7 +29,6 @@ r.get("/challenges", auth, async (req, res, next) => {
       orderBy: [{ difficulty: "asc" }, { type: "desc" }, { createdAt: "asc" }]
     });
 
-    // URINISHLAR VA STATUSNI TO'LIQ OLIB KELISH
     const attempts = await prisma.challengeAttempt.findMany({
       where: {
         userId: req.user.id,
@@ -93,7 +91,6 @@ r.get("/challenges", auth, async (req, res, next) => {
   }
 });
 
-// GET /api/challenges/:id
 r.get("/challenges/:id", auth, async (req, res, next) => {
   try {
     const challenge = await prisma.challenge.findUnique({
@@ -113,7 +110,6 @@ r.get("/challenges/:id", auth, async (req, res, next) => {
       }
     });
 
-    // Agar vazifa bloklangan yoki bajarilgan bo'lsa frontendga aniq holatni qaytaramiz
     res.json({ 
       challenge, 
       attempt: attempt || { status: "ACTIVE", attempts: 0, passed: false } 
@@ -123,7 +119,6 @@ r.get("/challenges/:id", auth, async (req, res, next) => {
   }
 });
 
-// POST /api/challenges/:id/submit
 r.post("/challenges/:id/submit", auth, submitLimiter, async (req, res, next) => {
   try {
     const challenge = await prisma.challenge.findUnique({
@@ -140,14 +135,19 @@ r.post("/challenges/:id/submit", auth, submitLimiter, async (req, res, next) => 
       }
     });
 
-    // QAT'IY TEKshIRUV: Agar oldin bloklangan yoki bajarilgan bo'lsa darhol to'xtatamiz
-    if (prevAttempt && (prevAttempt.status === "LOCKED" || prevAttempt.status === "COMPLETED")) {
+    if (prevAttempt && prevAttempt.status === "COMPLETED") {
       return res.status(403).json({ 
         success: false, 
         locked: true,
-        message: prevAttempt.status === "LOCKED" 
-          ? "Bu vazifa imkoniyatlar tugagani uchun bloklangan." 
-          : "Siz bu vazifani allaqachon muvaffaqiyatli bajargansiz." 
+        message: "Siz bu vazifani allaqachon muvaffaqiyatli bajargansiz!" 
+      });
+    }
+
+    if (prevAttempt && prevAttempt.status === "LOCKED") {
+      return res.status(403).json({ 
+        success: false, 
+        locked: true,
+        message: "Imkoniyatlaringiz tugagani uchun bu vazifa bloklangan." 
       });
     }
 
@@ -174,7 +174,6 @@ r.post("/challenges/:id/submit", auth, submitLimiter, async (req, res, next) => 
 
       if (!isCorrect) {
         attemptsCount += 1;
-        // 2-martagacha urinishga ruxsat, 2 taga yetsa status LOCKED bo'ladi
         updatedStatus = attemptsCount >= 2 ? "LOCKED" : "ACTIVE";
       } else {
         updatedStatus = "COMPLETED";
@@ -188,11 +187,7 @@ r.post("/challenges/:id/submit", auth, submitLimiter, async (req, res, next) => 
         return res.status(413).json({ message: "Kod hajmi belgilangan chegaradan katta." });
       }
 
-      runnerResult = await executeCodeTests({
-        code,
-        language,
-        challenge
-      });
+      runnerResult = await executeCodeTests({ code, language, challenge });
     }
 
     let aiReview;
@@ -202,9 +197,7 @@ r.post("/challenges/:id/submit", auth, submitLimiter, async (req, res, next) => 
       aiReview = {
         overall: runnerResult.passed ? 100 : 0,
         correctness: runnerResult.passed ? 100 : 0,
-        quality: 85,
-        security: 90,
-        speed: 90,
+        quality: 85, security: 90, speed: 90,
         feedback: runnerResult.passed
           ? "Ajoyib! To'g'ri javob berdingiz."
           : `Javob noto'g'ri. Qolgan urinishlar: ${Math.max(0, 2 - attemptsCount)}`,
@@ -225,11 +218,7 @@ r.post("/challenges/:id/submit", auth, submitLimiter, async (req, res, next) => 
           if (cheatResult.status === 'CHEAT') {
             isCheatDetected = true;
             aiReview = {
-              overall: 0,
-              correctness: 0,
-              quality: 0,
-              security: 0,
-              speed: 0,
+              overall: 0, correctness: 0, quality: 0, security: 0, speed: 0,
               feedback: "Xato, o'tmadingiz! Kodingizda sun'iy intellekt yordami aniqlandi.",
               model: "AI Anti-Cheat Detektiv"
             };
@@ -241,22 +230,14 @@ r.post("/challenges/:id/submit", auth, submitLimiter, async (req, res, next) => 
       }
 
       if (!isCheatDetected) {
-        aiReview = await evaluateWithGemini({
-          code,
-          language,
-          challenge,
-          runnerResult
-        });
+        aiReview = await evaluateWithGemini({ code, language, challenge, runnerResult });
         if (runnerResult.passed && aiReview.overall >= 60) {
           updatedStatus = "COMPLETED";
         }
       }
     }
 
-    const passed = challenge.type === "QUIZ"
-      ? runnerResult.passed
-      : (runnerResult.passed && !isCheatDetected && aiReview.overall >= 60);
-
+    const passed = challenge.type === "QUIZ" ? runnerResult.passed : (runnerResult.passed && !isCheatDetected && aiReview.overall >= 60);
     const earnedPoints = passed ? challenge.points : 0;
 
     const submissionResult = await prisma.$transaction(async (tx) => {
@@ -289,10 +270,7 @@ r.post("/challenges/:id/submit", auth, submitLimiter, async (req, res, next) => 
 
       await tx.challengeAttempt.upsert({
         where: {
-          userId_challengeId: {
-            userId: req.user.id,
-            challengeId: challenge.id
-          }
+          userId_challengeId: { userId: req.user.id, challengeId: challenge.id }
         },
         update: {
           passed: prevAttempt?.passed || passed,
@@ -318,9 +296,7 @@ r.post("/challenges/:id/submit", auth, submitLimiter, async (req, res, next) => 
         select: { score: true, growth: true }
       });
 
-      const currentScore = Number(currentUser?.score || 0);
-      const newScore = currentScore + addedPoints;
-
+      const newScore = Number(currentUser?.score || 0) + addedPoints;
       await tx.user.update({
         where: { id: req.user.id },
         data: {
@@ -335,10 +311,7 @@ r.post("/challenges/:id/submit", auth, submitLimiter, async (req, res, next) => 
     });
 
     await recalculateAllTimeRanks();
-
-    const updatedUser = await prisma.user.findUnique({
-      where: { id: req.user.id }
-    });
+    const updatedUser = await prisma.user.findUnique({ where: { id: req.user.id } });
 
     if (submissionResult.addedPoints > 0) {
       await notify(
@@ -348,7 +321,6 @@ r.post("/challenges/:id/submit", auth, submitLimiter, async (req, res, next) => 
         "challenge"
       );
     }
-
     await pushLiveLeaderboard();
 
     if (challenge.type === "QUIZ" && !passed) {
