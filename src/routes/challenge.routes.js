@@ -1,4 +1,3 @@
-// challenge.routes.js[cite: 2]
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
 import { auth } from "../middleware/auth.js";
@@ -20,6 +19,7 @@ const submitLimiter = rateLimit({
   message: { message: "Juda ko‘p submission yuborildi. Bir ozdan keyin yana urinib ko‘ring." }
 });
 
+// GET /api/challenges?category=web&difficulty=easy
 r.get("/challenges", auth, async (req, res, next) => {
   try {
     const category = String(req.query.category || "web").toLowerCase();
@@ -30,12 +30,13 @@ r.get("/challenges", auth, async (req, res, next) => {
       orderBy: [{ difficulty: "asc" }, { type: "desc" }, { createdAt: "asc" }]
     });
 
+    // URINISHLAR VA STATUSNI TO'LIQ OLIB KELISH
     const attempts = await prisma.challengeAttempt.findMany({
       where: {
         userId: req.user.id,
         challengeId: { in: items.map((x) => x.id) }
       },
-      select: { challengeId: true, passed: true, score: true }
+      select: { challengeId: true, passed: true, score: true, status: true, attempts: true }
     });
 
     const map = new Map(attempts.map((x) => [x.challengeId, x]));
@@ -44,7 +45,7 @@ r.get("/challenges", auth, async (req, res, next) => {
     for (const diff of DIFFICULTY_ORDER) {
       const diffItems = items.filter((x) => x.difficulty?.toUpperCase() === diff);
       const diffTotal = diffItems.length;
-      const diffCompleted = diffItems.filter((x) => map.get(x.id)?.passed).length;
+      const diffCompleted = diffItems.filter((x) => map.get(x.id)?.passed || map.get(x.id)?.status === "COMPLETED").length;
       completionByDifficulty[diff] = {
         total: diffTotal,
         completed: diffCompleted,
@@ -63,13 +64,22 @@ r.get("/challenges", auth, async (req, res, next) => {
     }
 
     res.json({
-      items: items.map(({ tests, quiz, ...x }) => ({
-        ...x,
-        completed: Boolean(map.get(x.id)?.passed),
-        bestScore: map.get(x.id)?.score || 0,
-        hasQuiz: Boolean(quiz),
-        locked: !unlockedLevels.has(x.difficulty?.toUpperCase() || "EASY")
-      })),
+      items: items.map(({ tests, quiz, ...x }) => {
+        const attemptData = map.get(x.id);
+        const isCompleted = Boolean(attemptData?.passed || attemptData?.status === "COMPLETED");
+        const isLockedByAttempts = attemptData?.status === "LOCKED";
+        const isLevelLocked = !unlockedLevels.has(x.difficulty?.toUpperCase() || "EASY");
+
+        return {
+          ...x,
+          completed: isCompleted,
+          status: attemptData?.status || "ACTIVE",
+          attempts: attemptData?.attempts || 0,
+          bestScore: attemptData?.score || 0,
+          hasQuiz: Boolean(quiz),
+          locked: isLevelLocked || isLockedByAttempts
+        };
+      }),
       progression: {
         EASY: completionByDifficulty["EASY"],
         MEDIUM: completionByDifficulty["MEDIUM"],
@@ -83,6 +93,7 @@ r.get("/challenges", auth, async (req, res, next) => {
   }
 });
 
+// GET /api/challenges/:id
 r.get("/challenges/:id", auth, async (req, res, next) => {
   try {
     const challenge = await prisma.challenge.findUnique({
@@ -102,12 +113,17 @@ r.get("/challenges/:id", auth, async (req, res, next) => {
       }
     });
 
-    res.json({ challenge, attempt });
+    // Agar vazifa bloklangan yoki bajarilgan bo'lsa frontendga aniq holatni qaytaramiz
+    res.json({ 
+      challenge, 
+      attempt: attempt || { status: "ACTIVE", attempts: 0, passed: false } 
+    });
   } catch (e) {
     next(e);
   }
 });
 
+// POST /api/challenges/:id/submit
 r.post("/challenges/:id/submit", auth, submitLimiter, async (req, res, next) => {
   try {
     const challenge = await prisma.challenge.findUnique({
@@ -124,11 +140,14 @@ r.post("/challenges/:id/submit", auth, submitLimiter, async (req, res, next) => 
       }
     });
 
+    // QAT'IY TEKshIRUV: Agar oldin bloklangan yoki bajarilgan bo'lsa darhol to'xtatamiz
     if (prevAttempt && (prevAttempt.status === "LOCKED" || prevAttempt.status === "COMPLETED")) {
       return res.status(403).json({ 
         success: false, 
         locked: true,
-        message: "Siz bu vazifaga endi javob yubora olmaysiz (Bloklangan yoki Yakunlangan)." 
+        message: prevAttempt.status === "LOCKED" 
+          ? "Bu vazifa imkoniyatlar tugagani uchun bloklangan." 
+          : "Siz bu vazifani allaqachon muvaffaqiyatli bajargansiz." 
       });
     }
 
@@ -155,6 +174,7 @@ r.post("/challenges/:id/submit", auth, submitLimiter, async (req, res, next) => 
 
       if (!isCorrect) {
         attemptsCount += 1;
+        // 2-martagacha urinishga ruxsat, 2 taga yetsa status LOCKED bo'ladi
         updatedStatus = attemptsCount >= 2 ? "LOCKED" : "ACTIVE";
       } else {
         updatedStatus = "COMPLETED";
@@ -186,8 +206,8 @@ r.post("/challenges/:id/submit", auth, submitLimiter, async (req, res, next) => 
         security: 90,
         speed: 90,
         feedback: runnerResult.passed
-          ? "Ajoyib! To'g'ri javob berdingiz. Keyingi savol va topshiriqlarga o'ting."
-          : "Javob noto'g'ri. Mavzu bo'yicha qo'llanma va savol shartini yana bir bor ko'rib chiqing.",
+          ? "Ajoyib! To'g'ri javob berdingiz."
+          : `Javob noto'g'ri. Qolgan urinishlar: ${Math.max(0, 2 - attemptsCount)}`,
         model: "Quiz Validator",
         results: runnerResult.results
       };
@@ -210,7 +230,7 @@ r.post("/challenges/:id/submit", auth, submitLimiter, async (req, res, next) => 
               quality: 0,
               security: 0,
               speed: 0,
-              feedback: "Xato, o'tmadingiz! Kodingizda sun'iy intellekt yordami aniqlandi. Iltimos, o'zingiz mustaqil yozing.",
+              feedback: "Xato, o'tmadingiz! Kodingizda sun'iy intellekt yordami aniqlandi.",
               model: "AI Anti-Cheat Detektiv"
             };
             updatedStatus = "ACTIVE";
@@ -335,10 +355,10 @@ r.post("/challenges/:id/submit", auth, submitLimiter, async (req, res, next) => 
       return res.json({
         passed: false,
         locked: updatedStatus === "LOCKED",
-        attemptsLeft: 2 - attemptsCount,
+        attemptsLeft: Math.max(0, 2 - attemptsCount),
         message: updatedStatus === "LOCKED" 
-          ? "Imkoniyatlaringiz tugadi. Vazifa bloklandi." 
-          : `Xato javob! Yana ${2 - attemptsCount} ta imkoniyatingiz qoldi.`,
+          ? "Imkoniyatlaringiz tugadi (2 ta urinish). Vazifa bloklandi." 
+          : `Xato javob! Yana ${Math.max(0, 2 - attemptsCount)} ta imkoniyatingiz qoldi.`,
         feedback: aiReview.feedback
       });
     }
