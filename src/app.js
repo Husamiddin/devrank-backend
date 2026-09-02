@@ -13,8 +13,6 @@ import content from "./routes/content.routes.js";
 import dashboard from "./routes/dashboard.routes.js";
 import challenges from "./routes/challenge.routes.js";
 import projects from "./routes/projects.routes.js";
-import localAdminRoutes from "./routes/localAdmin.routes.js";
-app.use("/api", localAdminRoutes);
 export const app=express();
 const dirs=[path.resolve(process.env.UPLOAD_DIR||"uploads","projects"),path.resolve(process.env.UPLOAD_DIR||"uploads","avatars")];for(const d of dirs)fs.mkdirSync(d,{recursive:true});
 const origins=(process.env.FRONTEND_URL||"http://localhost:3000,http://127.0.0.1:3000").split(",").map(x=>x.trim()).filter(Boolean);
