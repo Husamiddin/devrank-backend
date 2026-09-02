@@ -1,3 +1,4 @@
+// schema.prisma[cite: 1]
 generator client {
   provider = "prisma-client-js"
 }
@@ -185,6 +186,8 @@ model ChallengeAttempt {
   challengeId String
   passed      Boolean  @default(false)
   score       Int      @default(0)
+  attempts    Int      @default(0)
+  status      String   @default("ACTIVE")
   feedback    String?  @db.Text
   createdAt   DateTime @default(now())
 

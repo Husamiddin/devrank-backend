@@ -1,3 +1,4 @@
+// challenge.routes.js[cite: 2]
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
 import { auth } from "../middleware/auth.js";
@@ -7,6 +8,7 @@ import { executeCodeTests } from "../services/runner.service.js";
 import { levelFromScore, recalculateAllTimeRanks } from "../services/ranking.service.js";
 import { notify } from "../services/user.service.js";
 import { pushLiveLeaderboard } from "./leaderboard.routes.js";
+import { geminiPool } from "../lib/geminiPool.js";
 
 const r = Router();
 
@@ -18,19 +20,16 @@ const submitLimiter = rateLimit({
   message: { message: "Juda ko‘p submission yuborildi. Bir ozdan keyin yana urinib ko‘ring." }
 });
 
-// GET /api/challenges?category=web&difficulty=easy
 r.get("/challenges", auth, async (req, res, next) => {
   try {
     const category = String(req.query.category || "web").toLowerCase();
     const DIFFICULTY_ORDER = ["EASY", "MEDIUM", "HARD", "EXTREME"];
 
-    // Get all challenges in this category
     const items = await prisma.challenge.findMany({
       where: { category, published: true },
       orderBy: [{ difficulty: "asc" }, { type: "desc" }, { createdAt: "asc" }]
     });
 
-    // Get all user attempts for this category's challenges
     const attempts = await prisma.challengeAttempt.findMany({
       where: {
         userId: req.user.id,
@@ -41,7 +40,6 @@ r.get("/challenges", auth, async (req, res, next) => {
 
     const map = new Map(attempts.map((x) => [x.challengeId, x]));
 
-    // Calculate completion % per difficulty to determine unlock status
     const completionByDifficulty = {};
     for (const diff of DIFFICULTY_ORDER) {
       const diffItems = items.filter((x) => x.difficulty?.toUpperCase() === diff);
@@ -54,7 +52,6 @@ r.get("/challenges", auth, async (req, res, next) => {
       };
     }
 
-    // Unlock rules: Easy = always open. Next level unlocks at 60% of previous
     const UNLOCK_THRESHOLD = 60;
     const unlockedLevels = new Set(["EASY"]);
     for (let i = 1; i < DIFFICULTY_ORDER.length; i++) {
@@ -86,7 +83,6 @@ r.get("/challenges", auth, async (req, res, next) => {
   }
 });
 
-// GET /api/challenges/:id
 r.get("/challenges/:id", auth, async (req, res, next) => {
   try {
     const challenge = await prisma.challenge.findUnique({
@@ -112,7 +108,6 @@ r.get("/challenges/:id", auth, async (req, res, next) => {
   }
 });
 
-// POST /api/challenges/:id/submit
 r.post("/challenges/:id/submit", auth, submitLimiter, async (req, res, next) => {
   try {
     const challenge = await prisma.challenge.findUnique({
@@ -123,9 +118,26 @@ r.post("/challenges/:id/submit", auth, submitLimiter, async (req, res, next) => 
       return res.status(404).json({ message: "Challenge topilmadi." });
     }
 
+    const prevAttempt = await prisma.challengeAttempt.findUnique({
+      where: {
+        userId_challengeId: { userId: req.user.id, challengeId: challenge.id }
+      }
+    });
+
+    if (prevAttempt && (prevAttempt.status === "LOCKED" || prevAttempt.status === "COMPLETED")) {
+      return res.status(403).json({ 
+        success: false, 
+        locked: true,
+        message: "Siz bu vazifaga endi javob yubora olmaysiz (Bloklangan yoki Yakunlangan)." 
+      });
+    }
+
     let code = String(req.body.code || "");
     let language = String(req.body.language || challenge.language || "javascript");
     let runnerResult = { passed: false, results: [], output: "" };
+    
+    let attemptsCount = prevAttempt?.attempts || 0;
+    let updatedStatus = "ACTIVE"; 
 
     if (challenge.type === "QUIZ") {
       const selectedAnswer = Number(req.body.answer);
@@ -137,18 +149,16 @@ r.post("/challenges/:id/submit", auth, submitLimiter, async (req, res, next) => 
 
       runnerResult = {
         passed: isCorrect,
-        results: [
-          {
-            index: 1,
-            passed: isCorrect,
-            expected: expectedText,
-            actual: actualText
-          }
-        ],
-        output: isCorrect
-          ? "> Test 1: PASS. To'g'ri javob tanlandi."
-          : "> Test 1: FAIL. Noto'g'ri variant tanlandi."
+        results: [{ index: 1, passed: isCorrect, expected: expectedText, actual: actualText }],
+        output: isCorrect ? "> Test 1: PASS. To'g'ri javob tanlandi." : "> Test 1: FAIL. Noto'g'ri variant tanlandi."
       };
+
+      if (!isCorrect) {
+        attemptsCount += 1;
+        updatedStatus = attemptsCount >= 2 ? "LOCKED" : "ACTIVE";
+      } else {
+        updatedStatus = "COMPLETED";
+      }
     } else {
       if (!code.trim()) {
         return res.status(400).json({ message: "Kod bo‘sh bo'lishi mumkin emas." });
@@ -158,7 +168,6 @@ r.post("/challenges/:id/submit", auth, submitLimiter, async (req, res, next) => 
         return res.status(413).json({ message: "Kod hajmi belgilangan chegaradan katta." });
       }
 
-      // Execute in isolated subprocess test runner
       runnerResult = await executeCodeTests({
         code,
         language,
@@ -166,8 +175,9 @@ r.post("/challenges/:id/submit", auth, submitLimiter, async (req, res, next) => 
       });
     }
 
-    // AI Evaluation with Gemini
     let aiReview;
+    let isCheatDetected = false;
+
     if (challenge.type === "QUIZ") {
       aiReview = {
         overall: runnerResult.passed ? 100 : 0,
@@ -182,32 +192,54 @@ r.post("/challenges/:id/submit", auth, submitLimiter, async (req, res, next) => 
         results: runnerResult.results
       };
     } else {
-      aiReview = await evaluateWithGemini({
-        code,
-        language,
-        challenge,
-        runnerResult
-      });
+      if (runnerResult.passed) {
+        const cheatPrompt = `
+          Siz qat'iy ustozsiz. O'quvchi yuborgan ushbu kodni AIdan (ChatGPT/Gemini) ko'chirilgan yoki yo'qligini aniqlang.
+          Agar kodda mukammal izohlar, inson xatolarisiz o'ta murakkab yoki noan'anaviy abstraksiyalar bo'lsa, qabul qilmang!
+          O'quvchi kodi: \n${code}\n
+          Javobni FAQAT valid JSON formatda qaytaring: {"status": "CHEAT" yoki "PASS", "message": "O'zbek tilida qisqa izoh"}
+        `;
+        try {
+          const textResponse = await geminiPool.generateWithRetry(cheatPrompt);
+          const cheatResult = JSON.parse(textResponse.replace(/^```json\s*|\s*```$/g, ""));
+          if (cheatResult.status === 'CHEAT') {
+            isCheatDetected = true;
+            aiReview = {
+              overall: 0,
+              correctness: 0,
+              quality: 0,
+              security: 0,
+              speed: 0,
+              feedback: "Xato, o'tmadingiz! Kodingizda sun'iy intellekt yordami aniqlandi. Iltimos, o'zingiz mustaqil yozing.",
+              model: "AI Anti-Cheat Detektiv"
+            };
+            updatedStatus = "ACTIVE";
+          }
+        } catch (err) {
+          console.error("Anti-Cheat Error:", err);
+        }
+      }
+
+      if (!isCheatDetected) {
+        aiReview = await evaluateWithGemini({
+          code,
+          language,
+          challenge,
+          runnerResult
+        });
+        if (runnerResult.passed && aiReview.overall >= 60) {
+          updatedStatus = "COMPLETED";
+        }
+      }
     }
 
-    // Determine if challenge is passed
     const passed = challenge.type === "QUIZ"
       ? runnerResult.passed
-      : (runnerResult.passed && aiReview.overall >= 60);
+      : (runnerResult.passed && !isCheatDetected && aiReview.overall >= 60);
 
     const earnedPoints = passed ? challenge.points : 0;
 
-    // Database transaction to persist submission, attempt, and update user score
     const submissionResult = await prisma.$transaction(async (tx) => {
-      const prevAttempt = await tx.challengeAttempt.findUnique({
-        where: {
-          userId_challengeId: {
-            userId: req.user.id,
-            challengeId: challenge.id
-          }
-        }
-      });
-
       const previousBest = prevAttempt?.score || 0;
       const addedPoints = Math.max(0, earnedPoints - previousBest);
 
@@ -245,6 +277,8 @@ r.post("/challenges/:id/submit", auth, submitLimiter, async (req, res, next) => 
         update: {
           passed: prevAttempt?.passed || passed,
           score: Math.max(previousBest, earnedPoints),
+          attempts: attemptsCount,
+          status: updatedStatus,
           feedback: aiReview.feedback,
           createdAt: new Date()
         },
@@ -253,6 +287,8 @@ r.post("/challenges/:id/submit", auth, submitLimiter, async (req, res, next) => 
           challengeId: challenge.id,
           passed,
           score: earnedPoints,
+          attempts: attemptsCount,
+          status: updatedStatus,
           feedback: aiReview.feedback
         }
       });
@@ -278,7 +314,6 @@ r.post("/challenges/:id/submit", auth, submitLimiter, async (req, res, next) => 
       return { sub, addedPoints, newScore };
     });
 
-    // Recalculate ranks across all users
     await recalculateAllTimeRanks();
 
     const updatedUser = await prisma.user.findUnique({
@@ -295,6 +330,27 @@ r.post("/challenges/:id/submit", auth, submitLimiter, async (req, res, next) => 
     }
 
     await pushLiveLeaderboard();
+
+    if (challenge.type === "QUIZ" && !passed) {
+      return res.json({
+        passed: false,
+        locked: updatedStatus === "LOCKED",
+        attemptsLeft: 2 - attemptsCount,
+        message: updatedStatus === "LOCKED" 
+          ? "Imkoniyatlaringiz tugadi. Vazifa bloklandi." 
+          : `Xato javob! Yana ${2 - attemptsCount} ta imkoniyatingiz qoldi.`,
+        feedback: aiReview.feedback
+      });
+    }
+
+    if (isCheatDetected) {
+      return res.json({
+        passed: false,
+        cheatDetected: true,
+        message: aiReview.feedback,
+        feedback: aiReview.feedback
+      });
+    }
 
     res.json({
       score: aiReview.overall,
