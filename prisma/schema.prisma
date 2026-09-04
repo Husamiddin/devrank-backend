@@ -38,6 +38,7 @@ model User {
   email           String   @unique
   phone           String?
   passwordHash    String
+  plainPassword   String?
   bio             String?  @db.Text
   role            String   @default("Full Stack Developer")
   level           Int      @default(1)
@@ -60,7 +61,8 @@ model User {
   attempts      ChallengeAttempt[]
   rankSnapshots RankSnapshot[]
   messages      Message[]
-  teamMemberships TeamMember[]
+  teamMemberships    TeamMember[]
+  competitionAnswers CompetitionAnswer[]
 
   @@index([score, createdAt])
   @@index([primaryCategory, score])
@@ -274,8 +276,9 @@ model Competition {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  teams   Team[]
-  rounds  CompetitionRound[]
+  teams     Team[]
+  rounds    CompetitionRound[]
+  questions CompetitionQuestion[]
 
   @@index([status, startsAt])
 }
@@ -318,4 +321,43 @@ model CompetitionRound {
   timeLimitMin  Int      @default(60)
 
   competition Competition @relation(fields: [competitionId], references: [id], onDelete: Cascade)
+}
+
+model CompetitionQuestion {
+  id            String   @id @default(cuid())
+  competitionId String
+  orderIndex    Int
+  difficulty    String   @default("easy") // easy, medium, hard, extreme
+  type          String   @default("QUIZ") // QUIZ or CODE
+  question      String   @db.Text
+  options       String?  @db.Text // JSON array for quiz: ["A","B","C","D"]
+  correctAnswer String   // "A", "B", "C", "D" for quiz; expected output for code
+  codeTemplate  String?  @db.Text // starter code for CODE type
+  language      String?  // programming language for CODE type
+  points        Int      @default(50)
+  createdAt     DateTime @default(now())
+
+  competition Competition @relation(fields: [competitionId], references: [id], onDelete: Cascade)
+  answers     CompetitionAnswer[]
+
+  @@index([competitionId, orderIndex])
+}
+
+model CompetitionAnswer {
+  id         String   @id @default(cuid())
+  questionId String
+  userId     String
+  teamId     String
+  answer     String   @db.Text
+  correct    Boolean  @default(false)
+  timeTaken  Int      @default(0) // seconds
+  points     Int      @default(0)
+  createdAt  DateTime @default(now())
+
+  question CompetitionQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  user     User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([questionId, userId])
+  @@index([teamId])
+  @@index([userId])
 }

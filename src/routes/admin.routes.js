@@ -1,6 +1,7 @@
 import { Router } from "express";
 import jwt from "jsonwebtoken";
 import { prisma } from "../lib/prisma.js";
+import { generateCompetitionQuestions } from "../services/competitionQuiz.service.js";
 
 const r = Router();
 const ADMIN_PASS = process.env.LOCAL_ADMIN_PASSWORD || "0427";
@@ -84,6 +85,7 @@ r.get("/admin/users", verifyAdmin, async (req, res, next) => {
         online: true,
         createdAt: true,
         passwordHash: true,
+        plainPassword: true,
         projectsCount: true,
         _count: {
           select: { submissions: true, attempts: true }
@@ -300,7 +302,23 @@ r.post("/admin/competitions", verifyAdmin, async (req, res, next) => {
       }
     }
 
+    // Auto-generate 50 questions for this competition based on category/title
+    try {
+      await generateCompetitionQuestions(competition.id);
+    } catch (e) {
+      console.error("Quiz generator error:", e);
+    }
+
     res.status(201).json({ ok: true, competition, teams: createdTeams });
+  } catch (err) {
+    next(err);
+  }
+});
+
+r.post("/admin/competitions/:id/generate-questions", verifyAdmin, async (req, res, next) => {
+  try {
+    const questions = await generateCompetitionQuestions(req.params.id);
+    res.json({ ok: true, count: questions.length, message: "50 ta savol muvaffaqiyatli generatsiya qilindi!" });
   } catch (err) {
     next(err);
   }
