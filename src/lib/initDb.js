@@ -4,7 +4,10 @@ import { prisma } from "./prisma.js";
 
 export async function initializeDatabase() {
   const dbUrl = process.env.DATABASE_URL || "postgresql://postgres:0427@localhost:5432/devrank?schema=public";
-  const client = new pg.Client({ connectionString: dbUrl });
+  const client = new pg.Client({
+    connectionString: dbUrl,
+    ssl: dbUrl.includes("sslmode=require") || dbUrl.includes("neon.tech") ? { rejectUnauthorized: false } : undefined
+  });
   
   try {
     await client.connect();

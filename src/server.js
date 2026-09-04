@@ -9,6 +9,12 @@ await initializeDatabase();
 await prisma.$connect();
 await prisma.user.updateMany({ data: { online: false } });
 
-app.listen(port, () => console.log(`DevRank UZ API running on http://localhost:${port}`));
-const shutdown=async()=>{await prisma.$disconnect();process.exit(0)};
-process.on("SIGINT",shutdown);process.on("SIGTERM",shutdown);
+const server = app.listen(port, () => console.log(`DevRank UZ API running on http://localhost:${port}`));
+const shutdown = async () => {
+  server.close(async () => {
+    await prisma.$disconnect();
+    process.exit(0);
+  });
+};
+process.on("SIGTERM", shutdown);
+
