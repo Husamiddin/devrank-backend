@@ -39,6 +39,7 @@ model User {
   phone           String?
   passwordHash    String
   plainPassword   String?
+  telegram        String?
   bio             String?  @db.Text
   role            String   @default("Full Stack Developer")
   level           Int      @default(1)
@@ -273,6 +274,8 @@ model Competition {
   startsAt    DateTime
   endsAt      DateTime
   maxTeams    Int      @default(10)
+  showResults Boolean  @default(true)
+  winnerContactReq Boolean @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -299,11 +302,16 @@ model Team {
 }
 
 model TeamMember {
-  id       String   @id @default(cuid())
-  teamId   String
-  userId   String
-  role     String   @default("MEMBER") // LEADER, MEMBER
-  joinedAt DateTime @default(now())
+  id                 String   @id @default(cuid())
+  teamId             String
+  userId             String
+  role               String   @default("MEMBER") // LEADER, MEMBER
+  disqualified       Boolean  @default(false)
+  disqualifiedReason String?
+  currentQuestion    Int      @default(1)
+  telegram           String?
+  contactPhone       String?
+  joinedAt           DateTime @default(now())
 
   team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)

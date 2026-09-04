@@ -1,12 +1,77 @@
 import { Router } from "express";
 import multer from "multer";
 import path from "node:path";
+import fs from "node:fs";
 import { auth } from "../middleware/auth.js";
 import { prisma } from "../lib/prisma.js";
 import { publicUser, updateSkills, notify } from "../services/user.service.js";
 import { recalculateAllTimeRanks } from "../services/ranking.service.js";
-const r=Router(); const upload=multer({dest:path.resolve(process.env.UPLOAD_DIR||"uploads","avatars")});
-r.get("/profile",auth,async(req,res,next)=>{try{res.json({user:await publicUser(req.user.id)})}catch(e){next(e)}});
-r.patch("/profile",auth,async(req,res,next)=>{try{const data={};if(req.body.name!==undefined)data.name=String(req.body.name).trim();if(req.body.phone!==undefined)data.phone=String(req.body.phone||"").trim()||null;if(req.body.bio!==undefined)data.bio=String(req.body.bio||"").trim();if(req.body.province!==undefined)data.province=String(req.body.province);if(req.body.primaryCategory!==undefined)data.primaryCategory=String(req.body.primaryCategory);if(req.body.avatar!==undefined)data.avatar=String(req.body.avatar||"")||null;const user=await prisma.user.update({where:{id:req.user.id},data});if(Array.isArray(req.body.technologies))await updateSkills(req.user.id,req.body.technologies,user.primaryCategory);await recalculateAllTimeRanks();await notify(req.user.id,"Profil yangilandi","Profil ma’lumotlaringiz muvaffaqiyatli saqlandi.");res.json({user:await publicUser(req.user.id)});}catch(e){next(e)}});
-r.post("/profile/avatar",auth,upload.single("avatar"),async(req,res,next)=>{try{if(!req.file)return res.status(400).json({message:"Avatar fayli kerak."});const url=`/uploads/avatars/${req.file.filename}`;const user=await prisma.user.update({where:{id:req.user.id},data:{avatar:url}});res.json({user:await publicUser(user.id)});}catch(e){next(e)}});
+
+const r = Router();
+
+const uploadDir = path.resolve(process.env.UPLOAD_DIR || "uploads", "avatars");
+if (!fs.existsSync(uploadDir)) {
+  try { fs.mkdirSync(uploadDir, { recursive: true }); } catch {}
+}
+
+const upload = multer({ dest: uploadDir });
+
+r.get("/profile", auth, async (req, res, next) => {
+  try {
+    res.json({ user: await publicUser(req.user.id) });
+  } catch (e) {
+    next(e);
+  }
+});
+
+r.patch("/profile", auth, async (req, res, next) => {
+  try {
+    const data = {};
+    if (req.body.name !== undefined) data.name = String(req.body.name).trim();
+    if (req.body.phone !== undefined) data.phone = String(req.body.phone || "").trim() || null;
+    if (req.body.telegram !== undefined) data.telegram = String(req.body.telegram || "").trim() || null;
+    if (req.body.bio !== undefined) data.bio = String(req.body.bio || "").trim();
+    if (req.body.province !== undefined) data.province = String(req.body.province);
+    if (req.body.primaryCategory !== undefined) data.primaryCategory = String(req.body.primaryCategory);
+    if (req.body.avatar !== undefined) data.avatar = String(req.body.avatar || "") || null;
+
+    const user = await prisma.user.update({
+      where: { id: req.user.id },
+      data
+    });
+
+    if (Array.isArray(req.body.technologies)) {
+      await updateSkills(req.user.id, req.body.technologies, user.primaryCategory);
+    }
+
+    await recalculateAllTimeRanks();
+    await notify(req.user.id, "Profil yangilandi", "Profil ma’lumotlaringiz muvaffaqiyatli saqlandi.");
+    res.json({ user: await publicUser(req.user.id) });
+  } catch (e) {
+    next(e);
+  }
+});
+
+r.post("/profile/avatar", auth, upload.single("avatar"), async (req, res, next) => {
+  try {
+    let avatarUrl = "";
+    if (req.file) {
+      avatarUrl = `/uploads/avatars/${req.file.filename}`;
+    } else if (req.body.avatar) {
+      avatarUrl = req.body.avatar;
+    } else {
+      return res.status(400).json({ message: "Avatar fayli yoki rasm ma'lumoti kerak." });
+    }
+
+    const user = await prisma.user.update({
+      where: { id: req.user.id },
+      data: { avatar: avatarUrl }
+    });
+
+    res.json({ user: await publicUser(user.id), avatar: avatarUrl });
+  } catch (e) {
+    next(e);
+  }
+});
+
 export default r;

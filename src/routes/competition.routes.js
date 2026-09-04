@@ -5,7 +5,7 @@ import { generateCompetitionQuestions } from "../services/competitionQuiz.servic
 
 const r = Router();
 
-// GET /api/competitions - Barcha faol va bo'lajak musobaqalar
+// GET /api/competitions - Barcha musobaqalar
 r.get("/competitions", async (req, res, next) => {
   try {
     const items = await prisma.competition.findMany({
@@ -62,7 +62,7 @@ r.get("/competitions/:id", async (req, res, next) => {
 
     if (!item) return res.status(404).json({ message: "Musobaqa topilmadi." });
 
-    // If no questions exist, auto-generate them
+    // Auto generate questions if none
     if (item._count.questions === 0) {
       await generateCompetitionQuestions(item.id);
     }
@@ -84,7 +84,6 @@ r.post("/competitions/:id/join", auth, async (req, res, next) => {
 
     if (!comp) return res.status(404).json({ message: "Musobaqa topilmadi." });
 
-    // Check if user is already in any team for this competition
     const existing = await prisma.teamMember.findFirst({
       where: {
         userId: req.user.id,
@@ -134,7 +133,16 @@ r.get("/competitions/:id/questions", auth, async (req, res, next) => {
       include: {
         teams: {
           include: {
-            members: { select: { userId: true, role: true } }
+            members: {
+              select: {
+                id: true,
+                userId: true,
+                role: true,
+                disqualified: true,
+                disqualifiedReason: true,
+                currentQuestion: true
+              }
+            }
           }
         }
       }
@@ -142,10 +150,28 @@ r.get("/competitions/:id/questions", auth, async (req, res, next) => {
 
     if (!comp) return res.status(404).json({ message: "Musobaqa topilmadi." });
 
+    // Check start time: Arena cannot be accessed before startsAt
+    const now = new Date();
+    if (new Date(comp.startsAt) > now) {
+      return res.status(403).json({
+        message: "Musobaqa hali boshlanmagan! Belgilangan vaqtda ochiladi.",
+        startsAt: comp.startsAt
+      });
+    }
+
     // Find current user's team
     const myTeam = comp.teams.find(t => t.members.some(m => m.userId === req.user.id));
     if (!myTeam) {
       return res.status(403).json({ message: "Savollarni ko'rish uchun avval jamoaga qo'shiling!" });
+    }
+
+    const currentMember = myTeam.members.find(m => m.userId === req.user.id);
+    if (currentMember?.disqualified) {
+      return res.status(403).json({
+        message: "Siz qoidabuzarlik sababli musobaqadan chetlatilgansiz!",
+        disqualified: true,
+        reason: currentMember.disqualifiedReason || "Boshqa oynaga o'tish yoki shubhali harakat"
+      });
     }
 
     // Auto generate questions if none
@@ -158,7 +184,7 @@ r.get("/competitions/:id/questions", auth, async (req, res, next) => {
       questions = await generateCompetitionQuestions(comp.id);
     }
 
-    // Fetch all answers submitted by current user's team
+    // Fetch all answers submitted by current user's team ONLY
     const teamAnswers = await prisma.competitionAnswer.findMany({
       where: {
         teamId: myTeam.id
@@ -180,13 +206,13 @@ r.get("/competitions/:id/questions", auth, async (req, res, next) => {
       };
     }
 
-    // Calculate question assignment across team members
-    const teamMemberIds = myTeam.members.map(m => m.userId);
+    // Round robin assignment across team members
+    const activeMembers = myTeam.members.filter(m => !m.disqualified);
+    const teamMemberIds = activeMembers.map(m => m.userId);
     const myMemberIndex = teamMemberIds.indexOf(req.user.id);
     const totalMembers = Math.max(teamMemberIds.length, 1);
 
     const formattedQuestions = questions.map((q) => {
-      // Round robin assignment: is this question primarily assigned to current user?
       const assignedIndex = (q.orderIndex - 1) % totalMembers;
       const isMyTurn = assignedIndex === myMemberIndex;
       const assignedUserId = teamMemberIds[assignedIndex];
@@ -195,6 +221,9 @@ r.get("/competitions/:id/questions", auth, async (req, res, next) => {
       if (q.options) {
         try { parsedOptions = JSON.parse(q.options); } catch {}
       }
+
+      // Time limit per question: 60s for quiz, 300s (5 min) for code
+      const timeLimitSec = q.type === "CODE" ? 300 : 60;
 
       return {
         id: q.id,
@@ -206,6 +235,7 @@ r.get("/competitions/:id/questions", auth, async (req, res, next) => {
         codeTemplate: q.codeTemplate,
         language: q.language,
         points: q.points,
+        timeLimitSec,
         isMyTurn,
         assignedToUserId: assignedUserId,
         status: answersMap[q.id] ? (answersMap[q.id].correct ? "SOLVED" : "FAILED") : "UNSOLVED",
@@ -227,7 +257,54 @@ r.get("/competitions/:id/questions", auth, async (req, res, next) => {
         score: myTeam.score,
         memberCount: teamMemberIds.length
       },
+      disqualified: false,
       questions: formattedQuestions
+    });
+  } catch (e) {
+    next(e);
+  }
+});
+
+// POST /api/competitions/:id/disqualify - Shubhali harakat / ekrandan chiqish
+r.post("/competitions/:id/disqualify", auth, async (req, res, next) => {
+  try {
+    const { reason = "Boshqa oynaga o'tish yoki shubhali harakat" } = req.body;
+    const { id: compId } = req.params;
+
+    const teamMember = await prisma.teamMember.findFirst({
+      where: {
+        userId: req.user.id,
+        team: { competitionId: compId }
+      },
+      include: { team: true, user: true }
+    });
+
+    if (!teamMember) {
+      return res.status(404).json({ message: "Jamoa a'zosi topilmadi." });
+    }
+
+    await prisma.teamMember.update({
+      where: { id: teamMember.id },
+      data: {
+        disqualified: true,
+        disqualifiedReason: String(reason).slice(0, 200)
+      }
+    });
+
+    // Notify user
+    await prisma.message.create({
+      data: {
+        userId: req.user.id,
+        title: "Musobaqadan chetlatildingiz",
+        body: `Siz "${teamMember.team.name}" jamoasidagi musobaqadan quyidagi sababga ko'ra chetlatildingiz: ${reason}. Admin ruxsati bilan qayta tiklanishingiz mumkin.`,
+        type: "system"
+      }
+    });
+
+    res.json({
+      ok: true,
+      disqualified: true,
+      message: "Qoidabuzarlik qayd etildi. Siz musobaqadan chetlatildingiz!"
     });
   } catch (e) {
     next(e);
@@ -237,7 +314,7 @@ r.get("/competitions/:id/questions", auth, async (req, res, next) => {
 // POST /api/competitions/:id/questions/:questionId/answer - Savolga javob berish
 r.post("/competitions/:id/questions/:questionId/answer", auth, async (req, res, next) => {
   try {
-    const { answer } = req.body;
+    const { answer, currentQuestionIndex = 1 } = req.body;
     const { id: compId, questionId } = req.params;
 
     if (!answer) {
@@ -249,7 +326,6 @@ r.post("/competitions/:id/questions/:questionId/answer", auth, async (req, res, 
     });
     if (!comp) return res.status(404).json({ message: "Musobaqa topilmadi." });
 
-    // Check if competition is active
     const now = new Date();
     if (new Date(comp.startsAt) > now) {
       return res.status(400).json({ message: "Musobaqa hali boshlanmadi!" });
@@ -271,12 +347,25 @@ r.post("/competitions/:id/questions/:questionId/answer", auth, async (req, res, 
       return res.status(403).json({ message: "Siz ushbu musobaqa jamoasida emassiz!" });
     }
 
+    if (teamMember.disqualified) {
+      return res.status(403).json({
+        message: "Siz musobaqadan chetlatilgansiz! Qayta kirish imkoni yo'q.",
+        disqualified: true
+      });
+    }
+
     const question = await prisma.competitionQuestion.findUnique({
       where: { id: questionId }
     });
     if (!question || question.competitionId !== compId) {
       return res.status(404).json({ message: "Savol topilmadi." });
     }
+
+    // Update current question progress
+    await prisma.teamMember.update({
+      where: { id: teamMember.id },
+      data: { currentQuestion: Number(currentQuestionIndex || question.orderIndex) }
+    });
 
     // Check if team already answered correctly
     const existingCorrect = await prisma.competitionAnswer.findFirst({
@@ -291,7 +380,6 @@ r.post("/competitions/:id/questions/:questionId/answer", auth, async (req, res, 
       return res.status(400).json({ message: "Bu savol jamoangiz tomonidan allaqachon to'g'ri ishlangan!" });
     }
 
-    // Check answer correctness
     let isCorrect = false;
     const cleanUserAnswer = String(answer).trim().toLowerCase();
     const cleanCorrectAnswer = String(question.correctAnswer).trim().toLowerCase();
@@ -299,14 +387,12 @@ r.post("/competitions/:id/questions/:questionId/answer", auth, async (req, res, 
     if (question.type === "QUIZ") {
       isCorrect = cleanUserAnswer === cleanCorrectAnswer;
     } else {
-      // CODE type: basic check or code verification
       isCorrect = cleanUserAnswer.length > 10;
     }
 
     const pointsAwarded = isCorrect ? question.points : 0;
 
-    // Record answer
-    const savedAnswer = await prisma.competitionAnswer.upsert({
+    await prisma.competitionAnswer.upsert({
       where: {
         questionId_userId: {
           questionId,
@@ -328,13 +414,11 @@ r.post("/competitions/:id/questions/:questionId/answer", auth, async (req, res, 
       }
     });
 
-    // Update Team score if correct
     if (isCorrect) {
       await prisma.team.update({
         where: { id: teamMember.teamId },
         data: { score: { increment: pointsAwarded } }
       });
-      // Also update user's overall score
       await prisma.user.update({
         where: { id: req.user.id },
         data: { score: { increment: pointsAwarded } }
@@ -347,7 +431,147 @@ r.post("/competitions/:id/questions/:questionId/answer", auth, async (req, res, 
       pointsAwarded,
       message: isCorrect
         ? `To'g'ri javob! Jamoangizga +${pointsAwarded} ball qo'shildi!`
-        : "Javob noto'g'ri. Qayta urinib ko'ring!"
+        : "Javob noto'g'ri. Jamoangiz bilan qayta urinib ko'ring!"
+    });
+  } catch (e) {
+    next(e);
+  }
+});
+
+// POST /api/competitions/:id/winner-contact - G'olib jamoa a'zosi diplom olish uchun ma'lumot qoldirishi
+r.post("/competitions/:id/winner-contact", auth, async (req, res, next) => {
+  try {
+    const { phone, telegram } = req.body;
+    const { id: compId } = req.params;
+
+    if (!phone || !telegram) {
+      return res.status(400).json({ message: "Telefon va telegram kiritilishi shart." });
+    }
+
+    // Update user
+    await prisma.user.update({
+      where: { id: req.user.id },
+      data: {
+        phone: String(phone).trim(),
+        telegram: String(telegram).trim()
+      }
+    });
+
+    // Update team member
+    await prisma.teamMember.updateMany({
+      where: {
+        userId: req.user.id,
+        team: { competitionId: compId }
+      },
+      data: {
+        contactPhone: String(phone).trim(),
+        telegram: String(telegram).trim()
+      }
+    });
+
+    // Send congratulation message
+    await prisma.message.create({
+      data: {
+        userId: req.user.id,
+        title: "Diplom ma'lumotlari qabul qilindi 🎓",
+        body: `Tabriklaymiz! Musobaqadagi g'alabangiz munosabati bilan diplomingiz tayyorlanmoqda. Biz siz bilan ${telegram} yoki ${phone} orqali bog'lanamiz!`,
+        type: "system"
+      }
+    });
+
+    res.json({
+      ok: true,
+      message: "Ma'lumotlaringiz muvaffaqiyatli saqlandi! Tez orada admin jamoasi siz bilan bog'lanadi."
+    });
+  } catch (e) {
+    next(e);
+  }
+});
+
+// GET /api/competitions/:id/results - Musobaqa yakuniy natijalari va g'oliblar
+r.get("/competitions/:id/results", auth, async (req, res, next) => {
+  try {
+    const comp = await prisma.competition.findUnique({
+      where: { id: req.params.id },
+      include: {
+        teams: {
+          orderBy: { score: "desc" },
+          include: {
+            members: {
+              include: {
+                user: { select: { id: true, name: true, avatar: true, score: true, level: true } }
+              }
+            }
+          }
+        }
+      }
+    });
+
+    if (!comp) return res.status(404).json({ message: "Musobaqa topilmadi." });
+
+    if (!comp.showResults) {
+      return res.json({
+        showResults: false,
+        message: "Natijalar hozircha admin tomonidan berkitilgan."
+      });
+    }
+
+    // Find my team
+    const myTeam = comp.teams.find(t => t.members.some(m => m.userId === req.user.id));
+    const isWinner = comp.teams.length > 0 && myTeam?.id === comp.teams[0].id;
+
+    // Fetch team's detailed mistakes & successes (only for user's own team)
+    let myTeamMistakes = [];
+    if (myTeam) {
+      const answers = await prisma.competitionAnswer.findMany({
+        where: { teamId: myTeam.id },
+        include: {
+          question: { select: { id: true, orderIndex: true, question: true, difficulty: true, points: true, type: true } },
+          user: { select: { id: true, name: true } }
+        },
+        orderBy: { question: { orderIndex: "asc" } }
+      });
+
+      myTeamMistakes = answers.map(a => ({
+        questionNumber: a.question.orderIndex,
+        questionText: a.question.question,
+        difficulty: a.question.difficulty,
+        answeredBy: a.user.name,
+        isCorrect: a.correct,
+        userAnswer: a.answer,
+        points: a.points
+      }));
+    }
+
+    const leaderboard = comp.teams.map((t, idx) => ({
+      rank: idx + 1,
+      id: t.id,
+      name: t.name,
+      score: t.score,
+      isWinner: idx === 0,
+      isMyTeam: t.id === myTeam?.id,
+      memberCount: t.members.length,
+      members: t.members.map(m => ({
+        id: m.id,
+        userId: m.userId,
+        name: m.user.name,
+        role: m.role,
+        disqualified: m.disqualified
+      }))
+    }));
+
+    res.json({
+      showResults: true,
+      competition: {
+        id: comp.id,
+        title: comp.title,
+        status: comp.status,
+        endsAt: comp.endsAt
+      },
+      isWinner,
+      myTeamRank: myTeam ? (comp.teams.findIndex(t => t.id === myTeam.id) + 1) : null,
+      leaderboard,
+      myTeamMistakes
     });
   } catch (e) {
     next(e);

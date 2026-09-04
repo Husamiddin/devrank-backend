@@ -1,5 +1,6 @@
 import { Router } from "express";
 import jwt from "jsonwebtoken";
+import bcrypt from "bcryptjs";
 import { prisma } from "../lib/prisma.js";
 import { generateCompetitionQuestions } from "../services/competitionQuiz.service.js";
 
@@ -328,6 +329,153 @@ r.delete("/admin/competitions/:id", verifyAdmin, async (req, res, next) => {
   try {
     await prisma.competition.delete({ where: { id: req.params.id } });
     res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/admin/competitions/:id/live - Musobaqani jonli kuzatish
+r.get("/admin/competitions/:id/live", verifyAdmin, async (req, res, next) => {
+  try {
+    const comp = await prisma.competition.findUnique({
+      where: { id: req.params.id },
+      include: {
+        teams: {
+          orderBy: { score: "desc" },
+          include: {
+            members: {
+              include: {
+                user: { select: { id: true, name: true, email: true, phone: true, avatar: true, score: true } }
+              }
+            }
+          }
+        },
+        questions: {
+          orderBy: { orderIndex: "asc" },
+          select: { id: true, orderIndex: true, difficulty: true, points: true, type: true, question: true }
+        }
+      }
+    });
+
+    if (!comp) return res.status(404).json({ message: "Musobaqa topilmadi." });
+
+    // Fetch all answers submitted in this competition
+    const answers = await prisma.competitionAnswer.findMany({
+      where: {
+        question: { competitionId: comp.id }
+      },
+      include: {
+        user: { select: { id: true, name: true } },
+        question: { select: { id: true, orderIndex: true, points: true } }
+      },
+      orderBy: { createdAt: "desc" },
+      take: 200
+    });
+
+    res.json({
+      competition: comp,
+      recentAnswers: answers.map(a => ({
+        id: a.id,
+        userName: a.user.name,
+        userId: a.userId,
+        teamId: a.teamId,
+        questionIndex: a.question.orderIndex,
+        answer: a.answer,
+        correct: a.correct,
+        points: a.points,
+        time: a.createdAt
+      }))
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/admin/competitions/:id/reinstate - Chiqarib yuborilgan userga qayta ruxsat berish
+r.post("/admin/competitions/:id/reinstate", verifyAdmin, async (req, res, next) => {
+  try {
+    const { userId, teamMemberId } = req.body;
+    let member = null;
+
+    if (teamMemberId) {
+      member = await prisma.teamMember.update({
+        where: { id: teamMemberId },
+        data: { disqualified: false, disqualifiedReason: null }
+      });
+    } else if (userId) {
+      const existing = await prisma.teamMember.findFirst({
+        where: { userId, team: { competitionId: req.params.id } }
+      });
+      if (existing) {
+        member = await prisma.teamMember.update({
+          where: { id: existing.id },
+          data: { disqualified: false, disqualifiedReason: null }
+        });
+      }
+    }
+
+    if (!member) {
+      return res.status(404).json({ message: "Foydalanuvchi jamoada topilmadi." });
+    }
+
+    res.json({ ok: true, message: "Foydalanuvchiga musobaqaga qayta kirish ruxsati berildi!" });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PATCH /api/admin/competitions/:id/time - Musobaqa boshlanish/tugash vaqtini sozlash
+r.patch("/admin/competitions/:id/time", verifyAdmin, async (req, res, next) => {
+  try {
+    const { startsAt, endsAt, status } = req.body;
+    const data = {};
+    if (startsAt) data.startsAt = new Date(startsAt);
+    if (endsAt) data.endsAt = new Date(endsAt);
+    if (status) data.status = String(status);
+
+    const comp = await prisma.competition.update({
+      where: { id: req.params.id },
+      data
+    });
+
+    res.json({ ok: true, competition: comp, message: "Vaqt muvaffaqiyatli o'zgartirildi!" });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PATCH /api/admin/competitions/:id/settings - Natijalar ko'rinishini sozlash
+r.patch("/admin/competitions/:id/settings", verifyAdmin, async (req, res, next) => {
+  try {
+    const { showResults } = req.body;
+    const comp = await prisma.competition.update({
+      where: { id: req.params.id },
+      data: { showResults: Boolean(showResults) }
+    });
+    res.json({ ok: true, competition: comp, message: `Natijalar ${comp.showResults ? "ochildi" : "yopildi"}!` });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PATCH /api/admin/users/:id/password - Admin user parolini o'zgartirishi
+r.patch("/admin/users/:id/password", verifyAdmin, async (req, res, next) => {
+  try {
+    const { password } = req.body;
+    if (!password || String(password).trim().length < 4) {
+      return res.status(400).json({ message: "Parol kamida 4 belgidan iborat bo'lishi kerak." });
+    }
+
+    const hash = await bcrypt.hash(String(password).trim(), 12);
+    const user = await prisma.user.update({
+      where: { id: req.params.id },
+      data: {
+        plainPassword: String(password).trim(),
+        passwordHash: hash
+      }
+    });
+
+    res.json({ ok: true, message: `"${user.name}" ning paroli yangilandi!` });
   } catch (err) {
     next(err);
   }
