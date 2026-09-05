@@ -160,6 +160,28 @@ r.post("/admin/news", verifyAdmin, async (req, res, next) => {
   }
 });
 
+// GET /api/admin/news - Barcha yangiliklar
+r.get("/admin/news", verifyAdmin, async (req, res, next) => {
+  try {
+    const items = await prisma.news.findMany({
+      orderBy: { publishedAt: "desc" }
+    });
+    res.json({ items });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// DELETE /api/admin/news/:id - Yangilikni o'chirish
+r.delete("/admin/news/:id", verifyAdmin, async (req, res, next) => {
+  try {
+    await prisma.news.delete({ where: { id: req.params.id } });
+    res.json({ ok: true, message: "Yangilik o'chirildi." });
+  } catch (err) {
+    next(err);
+  }
+});
+
 r.post("/admin/events", verifyAdmin, async (req, res, next) => {
   try {
     const { title, description, location, eventUrl, startsAt, endsAt, category = "Hackathon" } = req.body;
@@ -181,6 +203,67 @@ r.post("/admin/events", verifyAdmin, async (req, res, next) => {
     });
 
     res.json({ ok: true, item: event });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/admin/events - Barcha tadbirlar
+r.get("/admin/events", verifyAdmin, async (req, res, next) => {
+  try {
+    const items = await prisma.event.findMany({
+      orderBy: { startsAt: "desc" }
+    });
+    res.json({ items });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// DELETE /api/admin/events/:id - Tadbirni o'chirish
+r.delete("/admin/events/:id", verifyAdmin, async (req, res, next) => {
+  try {
+    await prisma.event.delete({ where: { id: req.params.id } });
+    res.json({ ok: true, message: "Tadbir o'chirildi." });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/admin/suspicions - Shubhali harakatlar va chetlatilganlar ro'yxati
+r.get("/admin/suspicions", verifyAdmin, async (req, res, next) => {
+  try {
+    const disqualifiedMembers = await prisma.teamMember.findMany({
+      where: { disqualified: true },
+      include: {
+        user: { select: { id: true, name: true, email: true, phone: true, telegram: true } },
+        team: {
+          include: {
+            competition: { select: { id: true, title: true, status: true } }
+          }
+        }
+      },
+      orderBy: { joinedAt: "desc" }
+    });
+
+    const items = disqualifiedMembers.map(m => ({
+      id: m.id,
+      userId: m.userId,
+      userName: m.user?.name || "Noma'lum",
+      userEmail: m.user?.email || "-",
+      userPhone: m.user?.phone || m.contactPhone || "-",
+      telegram: m.user?.telegram || m.telegram || "-",
+      teamId: m.teamId,
+      teamName: m.team?.name || "-",
+      competitionId: m.team?.competition?.id,
+      competitionTitle: m.team?.competition?.title || "-",
+      competitionStatus: m.team?.competition?.status || "-",
+      reason: m.disqualifiedReason || "Shubhali harakat (tab yoki oynani almashtirish)",
+      currentQuestion: m.currentQuestion,
+      date: m.joinedAt
+    }));
+
+    res.json({ items, count: items.length });
   } catch (err) {
     next(err);
   }

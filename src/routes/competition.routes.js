@@ -380,6 +380,19 @@ r.post("/competitions/:id/questions/:questionId/answer", auth, async (req, res, 
       return res.status(400).json({ message: "Bu savol jamoangiz tomonidan allaqachon to'g'ri ishlangan!" });
     }
 
+    // Check if user already answered this question - CANNOT CHANGE ANSWER!
+    const existingUserAns = await prisma.competitionAnswer.findUnique({
+      where: {
+        questionId_userId: {
+          questionId,
+          userId: req.user.id
+        }
+      }
+    });
+    if (existingUserAns) {
+      return res.status(400).json({ message: "Siz bu savolga allaqachon javob bergansiz! Javobni qayta o'zgartirib bo'lmaydi." });
+    }
+
     let isCorrect = false;
     const cleanUserAnswer = String(answer).trim().toLowerCase();
     const cleanCorrectAnswer = String(question.correctAnswer).trim().toLowerCase();
@@ -488,6 +501,35 @@ r.post("/competitions/:id/winner-contact", auth, async (req, res, next) => {
   }
 });
 
+// POST /api/competitions/:id/finish - User o'zi testni qonuniy yakunlashi
+r.post("/competitions/:id/finish", auth, async (req, res, next) => {
+  try {
+    const { phone, telegram } = req.body;
+    const { id: compId } = req.params;
+
+    if (phone || telegram) {
+      await prisma.user.update({
+        where: { id: req.user.id },
+        data: {
+          phone: phone ? String(phone).trim() : undefined,
+          telegram: telegram ? String(telegram).trim() : undefined
+        }
+      });
+      await prisma.teamMember.updateMany({
+        where: { userId: req.user.id, team: { competitionId: compId } },
+        data: {
+          contactPhone: phone ? String(phone).trim() : undefined,
+          telegram: telegram ? String(telegram).trim() : undefined
+        }
+      });
+    }
+
+    res.json({ ok: true, message: "Musobaqa muvaffaqiyatli yakunlandi! Natijalarni ko'rishingiz mumkin." });
+  } catch (e) {
+    next(e);
+  }
+});
+
 // GET /api/competitions/:id/results - Musobaqa yakuniy natijalari va g'oliblar
 r.get("/competitions/:id/results", auth, async (req, res, next) => {
   try {
@@ -514,6 +556,65 @@ r.get("/competitions/:id/results", auth, async (req, res, next) => {
         showResults: false,
         message: "Natijalar hozircha admin tomonidan berkitilgan."
       });
+    }
+
+    // Award bonus points to Top 1, 2, 3 places if not yet awarded
+    const isEnded = new Date(comp.endsAt) <= new Date() || comp.status === "COMPLETED";
+    if (isEnded && comp.teams.length > 0) {
+      try {
+        const existingAward = await prisma.message.findFirst({
+          where: {
+            title: "Musobaqa sovrin ballari",
+            body: { contains: comp.id }
+          }
+        });
+
+        if (!existingAward) {
+          const userPoints = await prisma.competitionAnswer.groupBy({
+            by: ["userId"],
+            where: { question: { competitionId: comp.id }, correct: true },
+            _sum: { points: true }
+          });
+          const scoreMap = {};
+          userPoints.forEach(p => { scoreMap[p.userId] = p._sum.points || 0; });
+
+          for (let teamIdx = 0; teamIdx < comp.teams.length; teamIdx++) {
+            const team = comp.teams[teamIdx];
+            const isWinningTeam = teamIdx === 0;
+
+            const sortedMembers = [...team.members].sort((a, b) => {
+              const scA = scoreMap[a.userId] || 0;
+              const scB = scoreMap[b.userId] || 0;
+              return scB - scA;
+            });
+
+            // 1-o'rin uchun 500 pts (yutgan jamoa) / 100 pts (mag'lub jamoa), 2-o'rin 50 pts, 3-o'rin 20 pts
+            const prizeTiers = isWinningTeam ? [500, 50, 20] : [100, 50, 20];
+
+            for (let mIdx = 0; mIdx < sortedMembers.length && mIdx < 3; mIdx++) {
+              const member = sortedMembers[mIdx];
+              const bonusPts = prizeTiers[mIdx];
+              const memberRankInTeam = mIdx + 1;
+
+              await prisma.user.update({
+                where: { id: member.userId },
+                data: { score: { increment: bonusPts } }
+              });
+
+              await prisma.message.create({
+                data: {
+                  userId: member.userId,
+                  title: "Musobaqa sovrin ballari",
+                  body: `Tabriklaymiz! "${comp.title}" musobaqasida jamoangiz ${isWinningTeam ? "G'olib (1-o'rin)" : "ishtirokchi"} bo'ldi. Siz jamoangizda ${memberRankInTeam}-o'rinni egallab, shaxsiy hisobingizga +${bonusPts} pts mukofot ball oldingiz! (Musobaqa ID: ${comp.id})`,
+                  type: "reward"
+                }
+              });
+            }
+          }
+        }
+      } catch (errAward) {
+        console.error("Bonus awarding error:", errAward);
+      }
     }
 
     // Find my team
