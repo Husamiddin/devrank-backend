@@ -64,7 +64,7 @@ r.post("/company/login", (req, res) => {
 // ----------------- OVERALL TALENT STATS -----------------
 r.get("/company/stats", verifyCompany, async (req, res, next) => {
   try {
-    const [totalUsers, onlineCount, competitionsCount, totalSubmissions, disqualifiedMembers] =
+    const [totalUsers, onlineCount, competitionsCount, totalSubmissions, activeDisqualified, infractionMessages] =
       await Promise.all([
         prisma.user.count(),
         prisma.user.count({ where: { online: true } }),
@@ -75,10 +75,20 @@ r.get("/company/stats", verifyCompany, async (req, res, next) => {
           select: { userId: true },
           distinct: ["userId"],
         }),
+        prisma.message.findMany({
+          where: { title: { contains: "chetlatil" } },
+          select: { userId: true, createdAt: true },
+        }),
       ]);
 
-    const disqualifiedUserIds = new Set(disqualifiedMembers.map((m) => m.userId));
-    const cleanCandidatesCount = Math.max(0, totalUsers - disqualifiedUserIds.size);
+    // Track both currently disqualified and historical infractions
+    const infractionUserIds = new Set(infractionMessages.map((m) => m.userId));
+    const activeDisqualifiedUserIds = new Set(activeDisqualified.map((m) => m.userId));
+    const allSuspiciousUserIds = new Set([...infractionUserIds, ...activeDisqualifiedUserIds]);
+
+    // Never resets to 0 even if admin reinstates
+    const totalInfractionsCount = Math.max(infractionMessages.length, activeDisqualified.length);
+    const cleanCandidatesCount = Math.max(0, totalUsers - allSuspiciousUserIds.size);
 
     const categories = await prisma.user.groupBy({
       by: ["primaryCategory"],
@@ -91,7 +101,8 @@ r.get("/company/stats", verifyCompany, async (req, res, next) => {
       stats: {
         totalUsers,
         cleanCandidatesCount,
-        disqualifiedCount: disqualifiedUserIds.size,
+        disqualifiedCount: totalInfractionsCount,
+        activeDisqualifiedCount: activeDisqualifiedUserIds.size,
         onlineCount,
         competitionsCount,
         totalSubmissions,
@@ -155,40 +166,63 @@ r.get("/company/candidates", verifyCompany, async (req, res, next) => {
     if (sortBy === "level") orderBy = [{ level: "desc" }, { score: "desc" }];
     if (sortBy === "recent") orderBy = [{ createdAt: "desc" }];
 
-    const users = await prisma.user.findMany({
-      where,
-      orderBy,
-      take: Number(limit) || 100,
-      include: {
-        skills: {
-          include: { skill: true },
-          take: 6,
-        },
-        teamMemberships: {
-          include: {
-            team: {
-              select: {
-                id: true,
-                name: true,
-                rank: true,
-                score: true,
-                competition: { select: { id: true, title: true } },
+    const [users, allInfractionMessages] = await Promise.all([
+      prisma.user.findMany({
+        where,
+        orderBy,
+        take: Number(limit) || 100,
+        include: {
+          skills: {
+            include: { skill: true },
+            take: 6,
+          },
+          teamMemberships: {
+            include: {
+              team: {
+                select: {
+                  id: true,
+                  name: true,
+                  rank: true,
+                  score: true,
+                  competitionId: true,
+                  competition: { select: { id: true, title: true } },
+                },
               },
             },
           },
+          competitionAnswers: {
+            select: {
+              id: true,
+              correct: true,
+              points: true,
+              timeTaken: true,
+              question: { select: { competitionId: true } },
+            },
+          },
+          submissions: {
+            select: { id: true, status: true, score: true },
+          },
         },
-        competitionAnswers: {
-          select: { id: true, correct: true, points: true, timeTaken: true },
-        },
-        submissions: {
-          select: { id: true, status: true, score: true },
-        },
-      },
+      }),
+      prisma.message.findMany({
+        where: { title: { contains: "chetlatil" } },
+        select: { userId: true },
+      }),
+    ]);
+
+    // Map infractions per user
+    const infractionCountByUser = {};
+    allInfractionMessages.forEach((m) => {
+      infractionCountByUser[m.userId] = (infractionCountByUser[m.userId] || 0) + 1;
     });
 
     const candidates = users
       .map((u) => {
-        const isDisqualifiedAny = u.teamMemberships.some((m) => m.disqualified);
+        const isCurrentlyDisqualified = u.teamMemberships.some((m) => m.disqualified);
+        const pastInfractionCount = infractionCountByUser[u.id] || 0;
+        const totalSuspicionCount = pastInfractionCount + (isCurrentlyDisqualified ? 1 : 0);
+        const isClean = !isCurrentlyDisqualified && pastInfractionCount === 0;
+
         const totalAnswers = u.competitionAnswers.length;
         const correctAnswers = u.competitionAnswers.filter((a) => a.correct).length;
         const accuracy = totalAnswers > 0 ? Math.round((correctAnswers / totalAnswers) * 100) : null;
@@ -204,8 +238,22 @@ r.get("/company/candidates", verifyCompany, async (req, res, next) => {
         const contactTelegram =
           u.telegram || u.teamMemberships.find((m) => m.telegram)?.telegram || null;
 
-        // wins in competitions
-        const wonCompetitions = u.teamMemberships.filter((m) => m.team?.rank === 1).length;
+        // REAL competition participation: user must have answered at least 1 question
+        const activeCompIds = new Set(
+          u.competitionAnswers.map((a) => a.question?.competitionId).filter(Boolean)
+        );
+        const realCompetitionsCount = activeCompIds.size;
+
+        // REAL wins: user's team is rank 1 AND user answered at least 1 question correctly in that competition
+        const wonCompetitions = u.teamMemberships.filter((m) => {
+          if (m.team?.rank !== 1) return false;
+          const compId = m.team?.competitionId;
+          if (!compId) return false;
+          // Must have at least 1 correct answer in this competition
+          return u.competitionAnswers.some(
+            (a) => a.question?.competitionId === compId && a.correct
+          );
+        }).length;
 
         return {
           id: u.id,
@@ -224,9 +272,11 @@ r.get("/company/candidates", verifyCompany, async (req, res, next) => {
           rank: u.rank,
           online: u.online,
           createdAt: u.createdAt,
-          isClean: !isDisqualifiedAny,
-          suspicionCount: u.teamMemberships.filter((m) => m.disqualified).length,
-          competitionsCount: u.teamMemberships.length,
+          isClean,
+          isCurrentlyDisqualified,
+          wasReinstated: !isCurrentlyDisqualified && pastInfractionCount > 0,
+          suspicionCount: totalSuspicionCount,
+          competitionsCount: realCompetitionsCount,
           wonCompetitionsCount: wonCompetitions,
           quizAccuracy: accuracy,
           totalAnswers,
@@ -244,11 +294,17 @@ r.get("/company/candidates", verifyCompany, async (req, res, next) => {
         return true;
       });
 
-    // Custom sorting if accuracy or competitions requested
+    // Custom sorting
     if (sortBy === "accuracy") {
       candidates.sort((a, b) => (b.quizAccuracy || 0) - (a.quizAccuracy || 0));
     } else if (sortBy === "competitions") {
       candidates.sort((a, b) => b.competitionsCount - a.competitionsCount);
+    } else if (sortBy === "score") {
+      candidates.sort((a, b) => b.score - a.score);
+    } else if (sortBy === "level") {
+      candidates.sort((a, b) => b.level - a.level);
+    } else if (sortBy === "recent") {
+      candidates.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     }
 
     res.json({ ok: true, candidates, count: candidates.length });
@@ -334,13 +390,29 @@ r.get("/company/candidates/:id", verifyCompany, async (req, res, next) => {
     }
 
     const isDisqualifiedAny = user.teamMemberships.some((m) => m.disqualified);
-    const disqualificationRecords = user.teamMemberships
-      .filter((m) => m.disqualified)
-      .map((m) => ({
-        competitionTitle: m.team?.competition?.title || "Noma'lum musobaqa",
-        reason: m.disqualifiedReason || "Shubhali harakat / qoidabuzarlik",
-        date: m.joinedAt,
-      }));
+    const pastInfractions = await prisma.message.findMany({
+      where: { userId: user.id, title: { contains: "chetlatil" } },
+      orderBy: { createdAt: "desc" },
+    });
+
+    const disqualificationRecords = [
+      ...user.teamMemberships
+        .filter((m) => m.disqualified)
+        .map((m) => ({
+          competitionTitle: m.team?.competition?.title || "Musobaqa",
+          reason: m.disqualifiedReason || "Shubhali harakat / qoidabuzarlik",
+          date: m.joinedAt,
+          status: "Faol chetlatilgan",
+        })),
+      ...pastInfractions.map((msg) => ({
+        competitionTitle: "Olimpiada / Musobaqa",
+        reason: msg.body?.replace(/^Siz [^:]+:\s*/, "") || "Shubhali harakat",
+        date: msg.createdAt,
+        status: "Qayta tiklangan (Tarix)",
+      })),
+    ];
+
+    const isClean = !isDisqualifiedAny && pastInfractions.length === 0;
 
     const totalAnswers = user.competitionAnswers.length;
     const correctAnswers = user.competitionAnswers.filter((a) => a.correct).length;
@@ -355,6 +427,22 @@ r.get("/company/candidates/:id", verifyCompany, async (req, res, next) => {
       user.phone || user.teamMemberships.find((m) => m.contactPhone)?.contactPhone || null;
     const contactTelegram =
       user.telegram || user.teamMemberships.find((m) => m.telegram)?.telegram || null;
+
+    // Real competitions participated
+    const activeCompIds = new Set(
+      user.competitionAnswers.map((a) => a.question?.competitionId).filter(Boolean)
+    );
+    const realCompetitionsCount = activeCompIds.size;
+
+    // Real won competitions
+    const wonCompetitions = user.teamMemberships.filter((m) => {
+      if (m.team?.rank !== 1) return false;
+      const compId = m.team?.competitionId;
+      if (!compId) return false;
+      return user.competitionAnswers.some(
+        (a) => a.question?.competitionId === compId && a.correct
+      );
+    }).length;
 
     res.json({
       ok: true,
@@ -375,7 +463,10 @@ r.get("/company/candidates/:id", verifyCompany, async (req, res, next) => {
         rank: user.rank,
         online: user.online,
         createdAt: user.createdAt,
-        isClean: !isDisqualifiedAny,
+        isClean,
+        isCurrentlyDisqualified: isDisqualifiedAny,
+        wasReinstated: !isDisqualifiedAny && pastInfractions.length > 0,
+        suspicionCount: pastInfractions.length + (isDisqualifiedAny ? 1 : 0),
         disqualificationRecords,
         skills: user.skills.map((s) => ({
           id: s.skillId,
@@ -387,8 +478,8 @@ r.get("/company/candidates/:id", verifyCompany, async (req, res, next) => {
           totalAnswers,
           correctAnswers,
           avgAnswerTimeSeconds: avgTime,
-          totalCompetitions: user.teamMemberships.length,
-          wonCompetitions: user.teamMemberships.filter((m) => m.team?.rank === 1).length,
+          totalCompetitions: realCompetitionsCount,
+          wonCompetitions,
           codeSubmissionsCount: user.submissions.length,
         },
         projects: user.projects.map((p) => ({
@@ -519,34 +610,210 @@ Hurmat bilan,
 // ----------------- COMPETITIONS LEADERBOARDS & STARS -----------------
 r.get("/company/competitions", verifyCompany, async (req, res, next) => {
   try {
-    const competitions = await prisma.competition.findMany({
-      orderBy: { startsAt: "desc" },
-      include: {
-        teams: {
-          orderBy: { score: "desc" },
-          include: {
-            members: {
-              include: {
-                user: {
-                  select: {
-                    id: true,
-                    name: true,
-                    role: true,
-                    level: true,
-                    score: true,
-                    phone: true,
-                    telegram: true,
-                    online: true,
+    const [competitions, allAnswers] = await Promise.all([
+      prisma.competition.findMany({
+        orderBy: { startsAt: "desc" },
+        include: {
+          _count: {
+            select: { questions: true, teams: true },
+          },
+          teams: {
+            orderBy: { score: "desc" },
+            include: {
+              members: {
+                include: {
+                  user: {
+                    select: {
+                      id: true,
+                      name: true,
+                      role: true,
+                      level: true,
+                      score: true,
+                      phone: true,
+                      telegram: true,
+                      online: true,
+                    },
                   },
                 },
               },
             },
           },
         },
-      },
+      }),
+      prisma.competitionAnswer.findMany({
+        select: {
+          userId: true,
+          correct: true,
+          points: true,
+          question: { select: { competitionId: true } },
+        },
+      }),
+    ]);
+
+    // Format competitions and filter out inactive members
+    const formattedCompetitions = competitions.map((comp) => {
+      const compAnswers = allAnswers.filter((a) => a.question?.competitionId === comp.id);
+      const userAnswersMap = {};
+      compAnswers.forEach((a) => {
+        if (!userAnswersMap[a.userId]) {
+          userAnswersMap[a.userId] = { total: 0, correct: 0, points: 0 };
+        }
+        userAnswersMap[a.userId].total += 1;
+        if (a.correct) {
+          userAnswersMap[a.userId].correct += 1;
+          userAnswersMap[a.userId].points += a.points || 0;
+        }
+      });
+
+      const teams = comp.teams.map((team, idx) => {
+        // Only keep members who actually answered at least 1 question
+        const activeMembers = team.members
+          .map((m) => {
+            const stats = userAnswersMap[m.userId] || { total: 0, correct: 0, points: 0 };
+            return {
+              id: m.id,
+              userId: m.userId,
+              role: m.role,
+              disqualified: m.disqualified,
+              disqualifiedReason: m.disqualifiedReason,
+              contactPhone: m.contactPhone,
+              telegram: m.telegram,
+              user: m.user,
+              totalAnswers: stats.total,
+              solvedCount: stats.correct,
+              pointsEarned: stats.points,
+              activeInCompetition: stats.total > 0,
+            };
+          })
+          .filter((m) => m.activeInCompetition)
+          .sort((a, b) => b.pointsEarned - a.pointsEarned || b.solvedCount - a.solvedCount);
+
+        return {
+          ...team,
+          members: activeMembers,
+          activeMemberCount: activeMembers.length,
+          isWinner: idx === 0,
+        };
+      });
+
+      const totalActiveParticipants = teams.reduce((acc, t) => acc + t.members.length, 0);
+
+      return {
+        id: comp.id,
+        title: comp.title,
+        description: comp.description,
+        rules: comp.rules || "Halol kod yozish, vaqt chegarasiga rioya qilish.",
+        category: comp.category,
+        status: comp.status,
+        startsAt: comp.startsAt,
+        endsAt: comp.endsAt,
+        questionsCount: comp._count?.questions || 50,
+        totalActiveParticipants,
+        teams,
+      };
     });
 
-    res.json({ ok: true, competitions });
+    res.json({ ok: true, competitions: formattedCompetitions });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ----------------- TOP TALENT PER CATEGORY -----------------
+r.get("/company/top-talents", verifyCompany, async (req, res, next) => {
+  try {
+    const categories = ["web", "ai", "mobile", "backend", "cyber"];
+
+    // Find all users who are not disqualified and have no infraction messages
+    const [infractionMessages, activeDisqualified] = await Promise.all([
+      prisma.message.findMany({
+        where: { title: { contains: "chetlatil" } },
+        select: { userId: true },
+      }),
+      prisma.teamMember.findMany({
+        where: { disqualified: true },
+        select: { userId: true },
+      }),
+    ]);
+
+    const excludedUserIds = new Set([
+      ...infractionMessages.map((m) => m.userId),
+      ...activeDisqualified.map((m) => m.userId),
+    ]);
+
+    const topPerCategory = {};
+
+    for (const cat of categories) {
+      const topUser = await prisma.user.findFirst({
+        where: {
+          primaryCategory: cat,
+          id: { notIn: Array.from(excludedUserIds) },
+        },
+        orderBy: [{ score: "desc" }, { rank: "asc" }],
+        include: {
+          skills: { include: { skill: true }, take: 5 },
+          competitionAnswers: { select: { correct: true } },
+          teamMemberships: {
+            include: { team: { select: { rank: true } } },
+          },
+        },
+      });
+
+      if (topUser) {
+        const totalA = topUser.competitionAnswers.length;
+        const correctA = topUser.competitionAnswers.filter((a) => a.correct).length;
+        topPerCategory[cat] = {
+          id: topUser.id,
+          name: topUser.name,
+          role: topUser.role,
+          primaryCategory: cat,
+          score: topUser.score,
+          rank: topUser.rank,
+          level: topUser.level,
+          province: topUser.province,
+          online: topUser.online,
+          phone: topUser.phone,
+          telegram: topUser.telegram,
+          email: topUser.email,
+          accuracy: totalA > 0 ? Math.round((correctA / totalA) * 100) : null,
+          skills: topUser.skills.map((s) => s.skill?.name).filter(Boolean),
+          isClean: true,
+        };
+      } else {
+        // Fallback: highest scoring user in category
+        const fallbackUser = await prisma.user.findFirst({
+          where: { primaryCategory: cat },
+          orderBy: [{ score: "desc" }],
+          include: {
+            skills: { include: { skill: true }, take: 5 },
+            competitionAnswers: { select: { correct: true } },
+          },
+        });
+        if (fallbackUser) {
+          const totalA = fallbackUser.competitionAnswers.length;
+          const correctA = fallbackUser.competitionAnswers.filter((a) => a.correct).length;
+          topPerCategory[cat] = {
+            id: fallbackUser.id,
+            name: fallbackUser.name,
+            role: fallbackUser.role,
+            primaryCategory: cat,
+            score: fallbackUser.score,
+            rank: fallbackUser.rank,
+            level: fallbackUser.level,
+            province: fallbackUser.province,
+            online: fallbackUser.online,
+            phone: fallbackUser.phone,
+            telegram: fallbackUser.telegram,
+            email: fallbackUser.email,
+            accuracy: totalA > 0 ? Math.round((correctA / totalA) * 100) : null,
+            skills: fallbackUser.skills.map((s) => s.skill?.name).filter(Boolean),
+            isClean: !excludedUserIds.has(fallbackUser.id),
+          };
+        }
+      }
+    }
+
+    res.json({ ok: true, topTalents: topPerCategory });
   } catch (err) {
     next(err);
   }
