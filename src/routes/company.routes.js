@@ -5,6 +5,18 @@ import { prisma } from "../lib/prisma.js";
 const r = Router();
 const COMPANY_PASS = process.env.COMPANY_PASSWORD || "company2026";
 
+export function formatPhone(raw) {
+  if (!raw || typeof raw !== "string") return null;
+  const digits = raw.replace(/\D/g, "");
+  if (digits.startsWith("998") && digits.length === 12) {
+    return `+998 (${digits.slice(3, 5)}) ${digits.slice(5, 8)}-${digits.slice(8, 10)}-${digits.slice(10, 12)}`;
+  }
+  if (digits.length === 9) {
+    return `+998 (${digits.slice(0, 2)}) ${digits.slice(2, 5)}-${digits.slice(5, 7)}-${digits.slice(7, 9)}`;
+  }
+  return null;
+}
+
 export function verifyCompany(req, res, next) {
   const authHeader = req.headers.authorization || "";
   const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
@@ -166,7 +178,7 @@ r.get("/company/candidates", verifyCompany, async (req, res, next) => {
     if (sortBy === "level") orderBy = [{ level: "desc" }, { score: "desc" }];
     if (sortBy === "recent") orderBy = [{ createdAt: "desc" }];
 
-    const [users, allInfractionMessages] = await Promise.all([
+    const [users, allInfractionMessages, allUsersForCounts] = await Promise.all([
       prisma.user.findMany({
         where,
         orderBy,
@@ -199,6 +211,9 @@ r.get("/company/candidates", verifyCompany, async (req, res, next) => {
               question: { select: { competitionId: true } },
             },
           },
+          attempts: {
+            select: { id: true, passed: true, score: true },
+          },
           submissions: {
             select: { id: true, status: true, score: true },
           },
@@ -208,6 +223,9 @@ r.get("/company/candidates", verifyCompany, async (req, res, next) => {
         where: { title: { contains: "chetlatil" } },
         select: { userId: true },
       }),
+      prisma.user.findMany({
+        select: { id: true, primaryCategory: true, online: true },
+      }),
     ]);
 
     // Map infractions per user
@@ -215,6 +233,15 @@ r.get("/company/candidates", verifyCompany, async (req, res, next) => {
     allInfractionMessages.forEach((m) => {
       infractionCountByUser[m.userId] = (infractionCountByUser[m.userId] || 0) + 1;
     });
+
+    const categoryCounts = {
+      ALL: allUsersForCounts.length,
+      web: allUsersForCounts.filter((x) => x.primaryCategory === "web").length,
+      ai: allUsersForCounts.filter((x) => x.primaryCategory === "ai").length,
+      cyber: allUsersForCounts.filter((x) => x.primaryCategory === "cyber").length,
+      mobile: allUsersForCounts.filter((x) => x.primaryCategory === "mobile").length,
+      ux: allUsersForCounts.filter((x) => x.primaryCategory === "ux").length,
+    };
 
     const candidates = users
       .map((u) => {
@@ -225,16 +252,34 @@ r.get("/company/candidates", verifyCompany, async (req, res, next) => {
 
         const totalAnswers = u.competitionAnswers.length;
         const correctAnswers = u.competitionAnswers.filter((a) => a.correct).length;
-        const accuracy = totalAnswers > 0 ? Math.round((correctAnswers / totalAnswers) * 100) : null;
+        const totalAttempts = u.attempts?.length || 0;
+        const passedAttempts = u.attempts?.filter((a) => a.passed).length || 0;
+        const totalSubmissions = u.submissions?.length || 0;
+        const passedSubmissions = u.submissions?.filter((s) => s.status === "COMPLETED").length || 0;
+
+        // ACCURACY: 100% REAL calculation from actual answers, attempts, or submissions
+        let accuracy = null;
+        let accuracyLabel = "Hali test yechmagan";
+        if (totalAnswers > 0) {
+          accuracy = Math.round((correctAnswers / totalAnswers) * 100);
+          accuracyLabel = `${accuracy}% (${correctAnswers}/${totalAnswers} musobaqa)`;
+        } else if (totalAttempts > 0) {
+          accuracy = Math.round((passedAttempts / totalAttempts) * 100);
+          accuracyLabel = `${accuracy}% (${passedAttempts}/${totalAttempts} masala)`;
+        } else if (totalSubmissions > 0) {
+          accuracy = Math.round((passedSubmissions / totalSubmissions) * 100);
+          accuracyLabel = `${accuracy}% (${passedSubmissions}/${totalSubmissions} kod)`;
+        }
+
         const totalPointsEarned = u.competitionAnswers.reduce((acc, cur) => acc + (cur.points || 0), 0);
         const avgTime =
           totalAnswers > 0
             ? Math.round(u.competitionAnswers.reduce((acc, cur) => acc + (cur.timeTaken || 0), 0) / totalAnswers)
             : null;
 
-        // contact info from user or team memberships
-        const contactPhone =
-          u.phone || u.teamMemberships.find((m) => m.contactPhone)?.contactPhone || null;
+        // Contact info: sanitized and formatted (no corrupted or fake strings)
+        const rawPhone = u.phone || u.teamMemberships.find((m) => m.contactPhone)?.contactPhone || null;
+        const contactPhone = formatPhone(rawPhone);
         const contactTelegram =
           u.telegram || u.teamMemberships.find((m) => m.telegram)?.telegram || null;
 
@@ -249,7 +294,6 @@ r.get("/company/candidates", verifyCompany, async (req, res, next) => {
           if (m.team?.rank !== 1) return false;
           const compId = m.team?.competitionId;
           if (!compId) return false;
-          // Must have at least 1 correct answer in this competition
           return u.competitionAnswers.some(
             (a) => a.question?.competitionId === compId && a.correct
           );
@@ -263,14 +307,14 @@ r.get("/company/candidates", verifyCompany, async (req, res, next) => {
           phone: contactPhone,
           telegram: contactTelegram,
           bio: u.bio,
-          role: u.role,
-          level: u.level,
-          province: u.province,
+          role: u.role || "Dasturchi",
+          level: u.level || 1,
+          province: u.province || "Noma'lum hudud",
           avatar: u.avatar,
-          primaryCategory: u.primaryCategory,
-          score: u.score,
-          rank: u.rank,
-          online: u.online,
+          primaryCategory: u.primaryCategory || "web",
+          score: u.score || 0,
+          rank: u.rank || 0,
+          online: Boolean(u.online),
           createdAt: u.createdAt,
           isClean,
           isCurrentlyDisqualified,
@@ -279,11 +323,15 @@ r.get("/company/candidates", verifyCompany, async (req, res, next) => {
           competitionsCount: realCompetitionsCount,
           wonCompetitionsCount: wonCompetitions,
           quizAccuracy: accuracy,
+          accuracyLabel,
           totalAnswers,
           correctAnswers,
+          totalAttempts,
+          passedAttempts,
+          codeSubmissionsCount: totalSubmissions,
+          passedSubmissionsCount: passedSubmissions,
           avgAnswerTimeSeconds: avgTime,
           competitionPointsEarned: totalPointsEarned,
-          codeSubmissionsCount: u.submissions.length,
           skills: u.skills.map((s) => s.skill?.name).filter(Boolean),
         };
       })
@@ -307,7 +355,13 @@ r.get("/company/candidates", verifyCompany, async (req, res, next) => {
       candidates.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     }
 
-    res.json({ ok: true, candidates, count: candidates.length });
+    res.json({
+      ok: true,
+      candidates,
+      count: candidates.length,
+      totalCount: allUsersForCounts.length,
+      categoryCounts,
+    });
   } catch (err) {
     next(err);
   }
@@ -366,6 +420,9 @@ r.get("/company/candidates/:id", verifyCompany, async (req, res, next) => {
           },
           orderBy: { createdAt: "desc" },
         },
+        attempts: {
+          select: { id: true, passed: true, score: true, createdAt: true },
+        },
         submissions: {
           include: {
             challenge: {
@@ -416,15 +473,33 @@ r.get("/company/candidates/:id", verifyCompany, async (req, res, next) => {
 
     const totalAnswers = user.competitionAnswers.length;
     const correctAnswers = user.competitionAnswers.filter((a) => a.correct).length;
-    const accuracy = totalAnswers > 0 ? Math.round((correctAnswers / totalAnswers) * 100) : null;
+    const totalAttempts = user.attempts?.length || 0;
+    const passedAttempts = user.attempts?.filter((a) => a.passed).length || 0;
+    const totalSubmissions = user.submissions?.length || 0;
+    const passedSubmissions = user.submissions?.filter((s) => s.status === "COMPLETED").length || 0;
+
+    let accuracy = null;
+    let accuracyLabel = "Hali test yechmagan";
+    if (totalAnswers > 0) {
+      accuracy = Math.round((correctAnswers / totalAnswers) * 100);
+      accuracyLabel = `${accuracy}% (${correctAnswers}/${totalAnswers} musobaqa)`;
+    } else if (totalAttempts > 0) {
+      accuracy = Math.round((passedAttempts / totalAttempts) * 100);
+      accuracyLabel = `${accuracy}% (${passedAttempts}/${totalAttempts} masala)`;
+    } else if (totalSubmissions > 0) {
+      accuracy = Math.round((passedSubmissions / totalSubmissions) * 100);
+      accuracyLabel = `${accuracy}% (${passedSubmissions}/${totalSubmissions} kod)`;
+    }
+
     const avgTime =
       totalAnswers > 0
         ? Math.round(user.competitionAnswers.reduce((acc, cur) => acc + (cur.timeTaken || 0), 0) / totalAnswers)
         : null;
 
     // Contact info
-    const contactPhone =
+    const rawPhone =
       user.phone || user.teamMemberships.find((m) => m.contactPhone)?.contactPhone || null;
+    const contactPhone = formatPhone(rawPhone);
     const contactTelegram =
       user.telegram || user.teamMemberships.find((m) => m.telegram)?.telegram || null;
 
@@ -454,20 +529,30 @@ r.get("/company/candidates/:id", verifyCompany, async (req, res, next) => {
         phone: contactPhone,
         telegram: contactTelegram,
         bio: user.bio,
-        role: user.role,
-        level: user.level,
-        province: user.province,
+        role: user.role || "Dasturchi",
+        level: user.level || 1,
+        province: user.province || "Noma'lum",
         avatar: user.avatar,
-        primaryCategory: user.primaryCategory,
-        score: user.score,
-        rank: user.rank,
-        online: user.online,
+        primaryCategory: user.primaryCategory || "web",
+        score: user.score || 0,
+        rank: user.rank || 0,
+        online: Boolean(user.online),
         createdAt: user.createdAt,
         isClean,
         isCurrentlyDisqualified: isDisqualifiedAny,
         wasReinstated: !isDisqualifiedAny && pastInfractions.length > 0,
-        suspicionCount: pastInfractions.length + (isDisqualifiedAny ? 1 : 0),
+        suspicionCount: disqualificationRecords.length,
         disqualificationRecords,
+        competitionsCount: realCompetitionsCount,
+        wonCompetitionsCount: wonCompetitions,
+        quizAccuracy: accuracy,
+        accuracyLabel,
+        totalAnswers,
+        correctAnswers,
+        totalAttempts,
+        passedAttempts,
+        codeSubmissionsCount: totalSubmissions,
+        passedSubmissionsCount: passedSubmissions,
         skills: user.skills.map((s) => ({
           id: s.skillId,
           name: s.skill?.name,
@@ -676,8 +761,8 @@ r.get("/company/competitions", verifyCompany, async (req, res, next) => {
               role: m.role,
               disqualified: m.disqualified,
               disqualifiedReason: m.disqualifiedReason,
-              contactPhone: m.contactPhone,
-              telegram: m.telegram,
+              contactPhone: formatPhone(m.contactPhone || m.user?.phone),
+              telegram: m.telegram || m.user?.telegram,
               user: m.user,
               totalAnswers: stats.total,
               solvedCount: stats.correct,
@@ -688,11 +773,18 @@ r.get("/company/competitions", verifyCompany, async (req, res, next) => {
           .filter((m) => m.activeInCompetition)
           .sort((a, b) => b.pointsEarned - a.pointsEarned || b.solvedCount - a.solvedCount);
 
+        const calculatedScore = activeMembers.reduce((sum, m) => sum + (m.pointsEarned || 0), 0);
+        // Only declare winner if competition is COMPLETED and score is greater than 0
+        const isWinner = comp.status === "COMPLETED" && calculatedScore > 0 && idx === 0;
+
         return {
-          ...team,
+          id: team.id,
+          name: team.name,
+          score: calculatedScore,
+          rank: calculatedScore > 0 ? team.rank : 0,
           members: activeMembers,
           activeMemberCount: activeMembers.length,
-          isWinner: idx === 0,
+          isWinner,
         };
       });
 
@@ -753,62 +845,63 @@ r.get("/company/top-talents", verifyCompany, async (req, res, next) => {
         include: {
           skills: { include: { skill: true }, take: 5 },
           competitionAnswers: { select: { correct: true } },
+          attempts: { select: { passed: true } },
+          submissions: { select: { status: true } },
           teamMemberships: {
             include: { team: { select: { rank: true } } },
           },
         },
       });
 
-      if (topUser) {
-        const totalA = topUser.competitionAnswers.length;
-        const correctA = topUser.competitionAnswers.filter((a) => a.correct).length;
-        topPerCategory[cat] = {
-          id: topUser.id,
-          name: topUser.name,
-          role: topUser.role,
+      const buildTalent = (u) => {
+        if (!u) return null;
+        const totalA = u.competitionAnswers?.length || 0;
+        const correctA = u.competitionAnswers?.filter((a) => a.correct).length || 0;
+        let accuracy = null;
+        if (totalA > 0) {
+          accuracy = Math.round((correctA / totalA) * 100);
+        } else if (u.attempts?.length > 0) {
+          const passed = u.attempts.filter((a) => a.passed).length;
+          accuracy = Math.round((passed / u.attempts.length) * 100);
+        } else if (u.submissions?.length > 0) {
+          const passed = u.submissions.filter((s) => s.status === "COMPLETED").length;
+          accuracy = Math.round((passed / u.submissions.length) * 100);
+        }
+
+        return {
+          id: u.id,
+          name: u.name,
+          role: u.role || "Dasturchi",
           primaryCategory: cat,
-          score: topUser.score,
-          rank: topUser.rank,
-          level: topUser.level,
-          province: topUser.province,
-          online: topUser.online,
-          phone: topUser.phone,
-          telegram: topUser.telegram,
-          email: topUser.email,
-          accuracy: totalA > 0 ? Math.round((correctA / totalA) * 100) : null,
-          skills: topUser.skills.map((s) => s.skill?.name).filter(Boolean),
-          isClean: true,
+          score: u.score || 0,
+          rank: u.rank || 0,
+          level: u.level || 1,
+          province: u.province || "Noma'lum",
+          online: Boolean(u.online),
+          phone: formatPhone(u.phone),
+          telegram: u.telegram,
+          email: u.email,
+          accuracy,
+          skills: u.skills?.map((s) => s.skill?.name).filter(Boolean) || [],
+          isClean: !excludedUserIds.has(u.id),
         };
+      };
+
+      if (topUser) {
+        topPerCategory[cat] = buildTalent(topUser);
       } else {
-        // Fallback: highest scoring user in category
         const fallbackUser = await prisma.user.findFirst({
           where: { primaryCategory: cat },
           orderBy: [{ score: "desc" }],
           include: {
             skills: { include: { skill: true }, take: 5 },
             competitionAnswers: { select: { correct: true } },
+            attempts: { select: { passed: true } },
+            submissions: { select: { status: true } },
           },
         });
         if (fallbackUser) {
-          const totalA = fallbackUser.competitionAnswers.length;
-          const correctA = fallbackUser.competitionAnswers.filter((a) => a.correct).length;
-          topPerCategory[cat] = {
-            id: fallbackUser.id,
-            name: fallbackUser.name,
-            role: fallbackUser.role,
-            primaryCategory: cat,
-            score: fallbackUser.score,
-            rank: fallbackUser.rank,
-            level: fallbackUser.level,
-            province: fallbackUser.province,
-            online: fallbackUser.online,
-            phone: fallbackUser.phone,
-            telegram: fallbackUser.telegram,
-            email: fallbackUser.email,
-            accuracy: totalA > 0 ? Math.round((correctA / totalA) * 100) : null,
-            skills: fallbackUser.skills.map((s) => s.skill?.name).filter(Boolean),
-            isClean: !excludedUserIds.has(fallbackUser.id),
-          };
+          topPerCategory[cat] = buildTalent(fallbackUser);
         }
       }
     }
