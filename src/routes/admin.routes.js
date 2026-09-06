@@ -564,4 +564,72 @@ r.patch("/admin/users/:id/password", verifyAdmin, async (req, res, next) => {
   }
 });
 
+// GET /api/admin/competition-requests - Musobaqani tugatganda so'ralgan kontaktlarni ko'rish
+r.get("/admin/competition-requests", verifyAdmin, async (req, res, next) => {
+  try {
+    const requests = await prisma.teamMember.findMany({
+      where: {
+        OR: [
+          { contactPhone: { not: null } },
+          { telegram: { not: null } }
+        ]
+      },
+      include: {
+        user: { select: { name: true, email: true, phone: true } },
+        team: {
+          include: {
+            competition: { select: { title: true, status: true } }
+          }
+        }
+      },
+      orderBy: { joinedAt: "desc" }
+    });
+
+    res.json({ ok: true, requests });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/admin/users/:id/points - Foydalanuvchiga ball qo'shish / ayirish
+r.post("/admin/users/:id/points", verifyAdmin, async (req, res, next) => {
+  try {
+    const { points } = req.body;
+    const pts = parseInt(points, 10);
+    
+    if (isNaN(pts) || pts === 0) {
+      return res.status(400).json({ message: "Ball noto'g'ri kiritildi (0 bo'lmagan son kiriting)." });
+    }
+
+    const existingUser = await prisma.user.findUnique({
+      where: { id: req.params.id },
+      select: { id: true, name: true, score: true }
+    });
+
+    if (!existingUser) {
+      return res.status(404).json({ message: "Foydalanuvchi topilmadi." });
+    }
+
+    if (pts < 0 && Math.abs(pts) > existingUser.score) {
+      return res.status(400).json({
+        message: `Foydalanuvchida jami ${existingUser.score} ball bor. Undan ko'p (${Math.abs(pts)}) ball ayirib bo'lmaydi!`
+      });
+    }
+
+    const user = await prisma.user.update({
+      where: { id: req.params.id },
+      data: { score: { increment: pts } },
+      select: { id: true, name: true, score: true }
+    });
+
+    res.json({
+      ok: true,
+      user,
+      message: `"${user.name}" ga ${pts > 0 ? `+${pts}` : pts} ball ${pts > 0 ? "qo'shildi" : "ayirildi"}. Yangi ball: ${user.score}`
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 export default r;

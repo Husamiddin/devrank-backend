@@ -676,6 +676,17 @@ r.get("/competitions/:id/results", auth, async (req, res, next) => {
       }));
     }
 
+    const userAnswersStats = await prisma.competitionAnswer.groupBy({
+      by: ["userId"],
+      where: { question: { competitionId: comp.id } },
+      _count: { _all: true },
+      _sum: { points: true }
+    });
+    const solvedMap = {};
+    userAnswersStats.forEach(s => {
+      solvedMap[s.userId] = { count: s._count._all, points: s._sum.points || 0 };
+    });
+
     const leaderboard = comp.teams.map((t, idx) => ({
       rank: idx + 1,
       id: t.id,
@@ -689,7 +700,9 @@ r.get("/competitions/:id/results", auth, async (req, res, next) => {
         userId: m.userId,
         name: m.user.name,
         role: m.role,
-        disqualified: m.disqualified
+        disqualified: m.disqualified,
+        solvedCount: solvedMap[m.userId]?.count || 0,
+        earnedPoints: solvedMap[m.userId]?.points || 0
       }))
     }));
 
@@ -699,6 +712,7 @@ r.get("/competitions/:id/results", auth, async (req, res, next) => {
         id: comp.id,
         title: comp.title,
         status: comp.status,
+        startsAt: comp.startsAt,
         endsAt: comp.endsAt
       },
       isWinner,
