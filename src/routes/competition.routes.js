@@ -399,8 +399,38 @@ r.post("/competitions/:id/questions/:questionId/answer", auth, async (req, res, 
 
     if (question.type === "QUIZ") {
       isCorrect = cleanUserAnswer === cleanCorrectAnswer;
-    } else {
-      isCorrect = cleanUserAnswer.length > 10;
+    } else if (question.type === "PROMPT") {
+      // PROMPT evaluation: formal English prompt check
+      const hasLength = cleanUserAnswer.length >= 40;
+      const isEnglish = /[a-zA-Z\s]{25,}/.test(answer);
+      const keywords = question.correctAnswer
+        ? question.correctAnswer.split(",").map((k) => k.trim().toLowerCase()).filter(Boolean)
+        : [];
+      const matched = keywords.filter((k) => cleanUserAnswer.includes(k));
+      // At least 2 relevant prompt terms or 20% match + good length
+      const matchRatio = keywords.length > 0 ? matched.length / keywords.length : 1;
+      isCorrect = hasLength && isEnglish && (matched.length >= 2 || matchRatio >= 0.2);
+    } else if (question.type === "CODE") {
+      // CODE evaluation: Extreme tasks (including Q50 500 BALL ML task)
+      if (question.orderIndex === 50) {
+        if (cleanUserAnswer === "4.32" || cleanUserAnswer.includes("4.32")) {
+          isCorrect = true;
+        } else {
+          try {
+            const userFn = new Function(`${answer}; return typeof scaledDotProductAttention === 'function' ? scaledDotProductAttention : null;`)();
+            if (userFn) {
+              const res1 = userFn([[1, 0], [0, 1]], [[1, 0], [0, 1]], [[1, 2], [3, 4]], 2);
+              if (String(res1).trim() === "4.32" || Math.abs(parseFloat(res1) - 4.32) < 0.05) {
+                isCorrect = true;
+              }
+            }
+          } catch {
+            isCorrect = false;
+          }
+        }
+      } else {
+        isCorrect = cleanUserAnswer.length > 20 && !cleanUserAnswer.includes("TODO");
+      }
     }
 
     const pointsAwarded = isCorrect ? question.points : 0;
@@ -444,7 +474,9 @@ r.post("/competitions/:id/questions/:questionId/answer", auth, async (req, res, 
       pointsAwarded,
       message: isCorrect
         ? `To'g'ri javob! Jamoangizga +${pointsAwarded} ball qo'shildi!`
-        : "Javob noto'g'ri. Jamoangiz bilan qayta urinib ko'ring!"
+        : (question.type === "PROMPT"
+            ? "Promptingiz qabul qilinmadi (kamida 40 ta belgidan iborat, formal inglizcha kalit so'zlarni o'z ichiga olishi kerak). Qoidaga binoan bu savolga qayta javob berib bo'lmaydi."
+            : "Javob noto'g'ri (0 ball). Qoidaga binoan bu savolga qayta javob berib bo'lmaydi.")
     });
   } catch (e) {
     next(e);
