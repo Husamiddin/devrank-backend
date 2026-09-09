@@ -3,10 +3,14 @@ import pg from "pg";
 import { prisma } from "./prisma.js";
 
 export async function initializeDatabase() {
-  const dbUrl = process.env.DATABASE_URL || "postgresql://postgres:0427@localhost:5432/AslKod?schema=public";
+  let dbUrl = process.env.DATABASE_URL || "postgresql://postgres:0427@localhost:5432/AslKod?schema=public";
+  if (dbUrl.includes("neon.tech") && !dbUrl.includes("connect_timeout")) {
+    dbUrl += (dbUrl.includes("?") ? "&" : "?") + "connect_timeout=30";
+  }
   const client = new pg.Client({
     connectionString: dbUrl,
-    ssl: dbUrl.includes("sslmode=require") || dbUrl.includes("neon.tech") ? { rejectUnauthorized: false } : undefined
+    ssl: dbUrl.includes("sslmode=require") || dbUrl.includes("neon.tech") ? { rejectUnauthorized: false } : undefined,
+    connectionTimeoutMillis: 30000
   });
   
   try {

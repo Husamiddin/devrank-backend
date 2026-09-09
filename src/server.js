@@ -2,14 +2,12 @@ import "dotenv/config";
 import { app } from "./app.js";
 import { prisma } from "./lib/prisma.js";
 import { initializeDatabase } from "./lib/initDb.js";
+import { dbState } from "./lib/dbState.js";
 
 const port = Number(process.env.PORT || 5000);
 
-let dbConnected = false;
-let dbError = null;
-
 export function getDbStatus() {
-  return { connected: dbConnected, error: dbError };
+  return dbState;
 }
 
 async function connectDbWithRetry(attempt = 1) {
@@ -17,12 +15,14 @@ async function connectDbWithRetry(attempt = 1) {
     await initializeDatabase();
     await prisma.$connect();
     await prisma.user.updateMany({ data: { online: false } });
-    dbConnected = true;
-    dbError = null;
+    dbState.connected = true;
+    dbState.error = null;
+    dbState.lastChecked = new Date().toISOString();
     console.log("✅ Database connected and initialized successfully.");
   } catch (err) {
-    dbConnected = false;
-    dbError = err.message;
+    dbState.connected = false;
+    dbState.error = err.message;
+    dbState.lastChecked = new Date().toISOString();
     console.error(`⚠️ Database connection attempt #${attempt} failed: ${err.message}`);
     console.warn("Server will continue running. Retrying database connection in 10 seconds...");
     setTimeout(() => connectDbWithRetry(attempt + 1), 10000);
