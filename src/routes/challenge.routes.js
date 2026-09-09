@@ -8,6 +8,7 @@ import { levelFromScore, recalculateAllTimeRanks } from "../services/ranking.ser
 import { notify } from "../services/user.service.js";
 import { pushLiveLeaderboard } from "./leaderboard.routes.js";
 import { geminiPool } from "../lib/geminiPool.js";
+import { computeCategoryScoresForUser } from "../services/categoryScore.service.js";
 
 const r = Router();
 
@@ -311,6 +312,7 @@ r.post("/challenges/:id/submit", auth, submitLimiter, async (req, res, next) => 
     });
 
     await recalculateAllTimeRanks();
+    await computeCategoryScoresForUser(req.user.id);
     const updatedUser = await prisma.user.findUnique({ where: { id: req.user.id } });
 
     if (submissionResult.addedPoints > 0) {

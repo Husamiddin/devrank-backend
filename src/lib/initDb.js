@@ -3,7 +3,7 @@ import pg from "pg";
 import { prisma } from "./prisma.js";
 
 export async function initializeDatabase() {
-  const dbUrl = process.env.DATABASE_URL || "postgresql://postgres:0427@localhost:5432/devrank?schema=public";
+  const dbUrl = process.env.DATABASE_URL || "postgresql://postgres:0427@localhost:5432/AslKod?schema=public";
   const client = new pg.Client({
     connectionString: dbUrl,
     ssl: dbUrl.includes("sslmode=require") || dbUrl.includes("neon.tech") ? { rejectUnauthorized: false } : undefined
@@ -282,7 +282,7 @@ async function seedInitialData() {
       tests: {
         unitTests: [
           { input: ["  Hello   WORLD  AI  "], expected: "hello world ai" },
-          { input: ["DevRank   UZ"], expected: "devrank uz" },
+          { input: ["AslKod   UZ"], expected: "AslKod uz" },
           { input: ["   python   "], expected: "python" }
         ]
       }
@@ -395,3 +395,4 @@ async function seedInitialData() {
 
   console.log(`Seeded ${challenges.length} real challenges and ${skills.length} skills successfully.`);
 }
+

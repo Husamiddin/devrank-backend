@@ -81,7 +81,7 @@ function executeStaticChecks(code, tests) {
  * Executes JS / TS code against unit tests in an isolated Node subprocess
  */
 async function runJsTsTests(code, lang, unitTests) {
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "devrank-runner-"));
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "AslKod-runner-"));
   const scriptPath = path.join(tmpDir, `solution.${lang === "typescript" ? "ts" : "js"}`);
 
   // Build a test harness script that runs each test case
@@ -153,7 +153,7 @@ for (let i = 0; i < testCases.length; i++) {
   }
 }
 
-console.log("__DEVRANK_RESULTS__" + JSON.stringify(results));
+console.log("__AslKod_RESULTS__" + JSON.stringify(results));
 `;
 
   try {
@@ -177,7 +177,7 @@ console.log("__DEVRANK_RESULTS__" + JSON.stringify(results));
       };
     }
 
-    const match = stdout.match(/__DEVRANK_RESULTS__(.*)$/m);
+    const match = stdout.match(/__AslKod_RESULTS__(.*)$/m);
     if (match) {
       try {
         const results = JSON.parse(match[1]);
@@ -213,7 +213,7 @@ console.log("__DEVRANK_RESULTS__" + JSON.stringify(results));
  * Executes Python code against unit tests in an isolated Python subprocess
  */
 async function runPythonTests(code, unitTests) {
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "devrank-runner-py-"));
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "AslKod-runner-py-"));
   const scriptPath = path.join(tmpDir, "solution.py");
 
   const harness = `
@@ -271,7 +271,7 @@ for i, tc in enumerate(test_cases):
             "actual": "Exception: " + str(e)
         })
 
-print("__DEVRANK_RESULTS__" + json.dumps(results))
+print("__AslKod_RESULTS__" + json.dumps(results))
 `;
 
   try {
@@ -292,7 +292,7 @@ print("__DEVRANK_RESULTS__" + json.dumps(results))
       };
     }
 
-    const match = stdout.match(/__DEVRANK_RESULTS__(.*)$/m);
+    const match = stdout.match(/__AslKod_RESULTS__(.*)$/m);
     if (match) {
       try {
         const results = JSON.parse(match[1]);
@@ -369,7 +369,7 @@ function runSubprocess(cmd, args, cwd, timeoutMs = 4000) {
  * Executes C# code using dotnet-script
  */
 async function runCSharpTests(code, unitTests) {
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "devrank-runner-cs-"));
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "AslKod-runner-cs-"));
   const scriptPath = path.join(tmpDir, "solution.csx");
 
   // Build test harness for C#
@@ -431,7 +431,7 @@ foreach (var tc in testCases)
     }
 }
 
-Console.WriteLine("__DEVRANK_RESULTS__" + JsonSerializer.Serialize(results));
+Console.WriteLine("__AslKod_RESULTS__" + JsonSerializer.Serialize(results));
 `;
 
   try {
@@ -458,7 +458,7 @@ Console.WriteLine("__DEVRANK_RESULTS__" + JsonSerializer.Serialize(results));
       };
     }
 
-    const match = stdout.match(/__DEVRANK_RESULTS__(.*)$/m);
+    const match = stdout.match(/__AslKod_RESULTS__(.*)$/m);
     if (match) {
       try {
         const results = JSON.parse(match[1]);
@@ -493,7 +493,7 @@ Console.WriteLine("__DEVRANK_RESULTS__" + JsonSerializer.Serialize(results));
  * Executes C++ code using g++
  */
 async function runCppTests(code, unitTests) {
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "devrank-runner-cpp-"));
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "AslKod-runner-cpp-"));
   const srcPath = path.join(tmpDir, "solution.cpp");
   const binPath = path.join(tmpDir, process.platform === "win32" ? "solution.exe" : "solution");
 
@@ -508,12 +508,12 @@ async function runCppTests(code, unitTests) {
 ${code}
 
 int main() {
-    // Static test harness - prints __DEVRANK_RESULTS__[{"index":1,"passed":true,...}]
+    // Static test harness - prints __AslKod_RESULTS__[{"index":1,"passed":true,...}]
     std::vector<std::string> results;
     
     // NOTE: For C++, tests are run manually per problem.
     // This is a basic harness that checks if the code compiles and runs.
-    std::cout << "__DEVRANK_RESULTS__[{\\\"index\\\":1,\\\"passed\\\":true,\\\"expected\\\":\\\"compiled\\\",\\\"actual\\\":\\\"compiled\\\"}]" << std::endl;
+    std::cout << "__AslKod_RESULTS__[{\\\"index\\\":1,\\\"passed\\\":true,\\\"expected\\\":\\\"compiled\\\",\\\"actual\\\":\\\"compiled\\\"}]" << std::endl;
     return 0;
 }
 `;
@@ -553,7 +553,7 @@ int main() {
       };
     }
 
-    const match = stdout.match(/__DEVRANK_RESULTS__(.*)$/m);
+    const match = stdout.match(/__AslKod_RESULTS__(.*)$/m);
     if (match) {
       try {
         const results = JSON.parse(match[1]);
@@ -577,4 +577,5 @@ int main() {
     } catch {}
   }
 }
+
 

@@ -51,7 +51,7 @@ export async function evaluateWithGemini({ code, language, challenge, runnerResu
   }
 
   const prompt = `
-Siz DevRank UZ professional AI Senior Code Reviewer tizimisiz.
+Siz AslKod UZ professional AI Senior Code Reviewer tizimisiz.
 Foydalanuvchi quyidagi dasturlash topshirig'ini bajardi va test runner natijalari keltirilgan.
 
 Topshiriq:
@@ -119,3 +119,4 @@ Iltimos, kodni chuqur tahlil qiling va FAQAT quyidagi JSON formatida javob qayta
     };
   }
 }
+

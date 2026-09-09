@@ -26,8 +26,9 @@ app.use(express.urlencoded({extended:true,limit:"2mb"}));
 const limiterSafeReads=new Set(["/api/profile","/api/stats","/api/leaderboard","/api/challenges","/api/news","/api/events","/api/messages","/api/competitions"]);
 app.use(rateLimit({windowMs:Number(process.env.RATE_LIMIT_WINDOW_MS||60000),max:Number(process.env.RATE_LIMIT_MAX||600),standardHeaders:"draft-8",legacyHeaders:false,skip:(req)=>req.path.startsWith("/api/leaderboard/stream")||(req.method==="GET"&&limiterSafeReads.has(req.path))||req.path.startsWith("/api/admin")||req.path.startsWith("/api/company"),message:{message:"Juda ko‘p so‘rov. Bir ozdan keyin yana urinib ko‘ring."}}));
 app.use("/uploads",express.static(path.resolve(process.env.UPLOAD_DIR||"uploads"),{maxAge:"1d"}));
-app.get("/",(_req,res)=>res.json({name:"DevRank UZ API",status:"ok",version:"3.0.0",time:new Date().toISOString()}));
-app.get("/api/health",(_req,res)=>res.json({ok:true,service:"devrank-api",time:new Date().toISOString()}));
+app.get("/",(_req,res)=>res.json({name:"AslKod UZ API",status:"ok",version:"3.0.0",time:new Date().toISOString()}));
+app.get("/api/health",(_req,res)=>res.json({ok:true,service:"AslKod-api",time:new Date().toISOString()}));
 app.use("/api",auth,profile,users,leaderboard,content,dashboard,challenges,projects,admin,competitions,company);
 app.use((req,res)=>res.status(404).json({message:"Route topilmadi.",path:req.path}));
 app.use((e,_req,res,_next)=>{console.error(e);if(e?.name==="ZodError")return res.status(400).json({message:"Validatsiya xatosi",issues:e.issues});if(e?.code==="P2002")return res.status(409).json({message:"Bu qiymat allaqachon mavjud."});if(e?.code==="P2025")return res.status(404).json({message:"Ma'lumot topilmadi."});if(Number.isInteger(e?.status))return res.status(e.status).json({message:e.message});res.status(500).json({message:process.env.NODE_ENV==="production"?"Internal server error":e?.message||"Internal server error"})});
+

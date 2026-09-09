@@ -76,8 +76,8 @@ const TOPIC_PRESETS = {
       {
         q: "HTML & JS Masala #4: Berilgan URL ro'yxatidan faqat xavfsiz (https:// bilan boshlanuvchi) havolalar uchun <a href='...'>Havola</a> teglarini hosil qiluvchi 'buildSecureLinks(urls)' funksiyasini yozing.",
         language: "javascript",
-        template: "function buildSecureLinks(urls) {\n  // urls = ['https://google.com', 'http://unsafe.com', 'https://devrank.uz']\n  // Natija faqat https havolalari uchun <a> teglar qatori\n  \n}",
-        expected: "<a href='https://google.com'>Link</a><a href='https://devrank.uz'>Link</a>"
+        template: "function buildSecureLinks(urls) {\n  // urls = ['https://google.com', 'http://unsafe.com', 'https://AslKod.uz']\n  // Natija faqat https havolalari uchun <a> teglar qatori\n  \n}",
+        expected: "<a href='https://google.com'>Link</a><a href='https://AslKod.uz'>Link</a>"
       },
       {
         q: "HTML & JS Masala #5: Berilgan ierarxik menyu ob'ektidan nested (ichma-ich) <ul><li> HTML ro'yxatini hosil qiluvchi 'renderMenu(items)' rekursiv funksiyasini yozing.",
@@ -361,3 +361,4 @@ export async function generateCompetitionQuestions(competitionId) {
     orderBy: { orderIndex: "asc" }
   });
 }
+

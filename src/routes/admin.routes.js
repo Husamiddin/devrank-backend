@@ -21,7 +21,7 @@ export function verifyAdmin(req, res, next) {
   }
 
   try {
-    const payload = jwt.verify(token, process.env.JWT_SECRET || "devrank-local-secret");
+    const payload = jwt.verify(token, process.env.JWT_SECRET || "AslKod-local-secret");
     if (payload.role !== "ADMIN") {
       return res.status(403).json({ message: "Admin ruxsati mavjud emas." });
     }
@@ -39,7 +39,7 @@ r.post("/admin/login", (req, res) => {
 
   const token = jwt.sign(
     { sub: "admin", role: "ADMIN", name: "Super Admin" },
-    process.env.JWT_SECRET || "devrank-local-secret",
+    process.env.JWT_SECRET || "AslKod-local-secret",
     { expiresIn: "7d" }
   );
 
@@ -633,3 +633,4 @@ r.post("/admin/users/:id/points", verifyAdmin, async (req, res, next) => {
 });
 
 export default r;
+
