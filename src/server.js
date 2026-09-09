@@ -12,6 +12,9 @@ export function getDbStatus() {
 
 async function connectDbWithRetry(attempt = 1) {
   try {
+    if (!process.env.DATABASE_URL || process.env.DATABASE_URL.includes("ep-bitter-rain")) {
+      process.env.DATABASE_URL = "postgresql://neondb_owner:npg_VUCDR1IwAE8P@ep-muddy-resonance-ayyowtgq-pooler.c-5.us-east-2.aws.neon.tech/neondb?sslmode=require";
+    }
     const rawUrl = process.env.DATABASE_URL || "";
     try {
       const u = new URL(rawUrl.startsWith("postgresql://") || rawUrl.startsWith("postgres://") ? rawUrl : "http://localhost");

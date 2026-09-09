@@ -1,8 +1,13 @@
 import { PrismaClient } from "@prisma/client";
 
+export const FALLBACK_NEON_URL = "postgresql://neondb_owner:npg_VUCDR1IwAE8P@ep-muddy-resonance-ayyowtgq-pooler.c-5.us-east-2.aws.neon.tech/neondb?sslmode=require";
+
 function getCleanUrl() {
   let url = process.env.DATABASE_URL;
-  if (!url) return undefined;
+  if (!url || url.includes("ep-bitter-rain")) {
+    url = FALLBACK_NEON_URL;
+    process.env.DATABASE_URL = url;
+  }
   
   if (url.includes("neon.tech")) {
     if (!url.includes("sslmode=")) {

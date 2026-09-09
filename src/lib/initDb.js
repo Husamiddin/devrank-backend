@@ -4,7 +4,11 @@ import { prisma } from "./prisma.js";
 import { dbState } from "./dbState.js";
 
 export async function initializeDatabase() {
-  let dbUrl = process.env.DATABASE_URL || "postgresql://postgres:0427@localhost:5432/AslKod?schema=public";
+  let dbUrl = process.env.DATABASE_URL;
+  if (!dbUrl || dbUrl.includes("ep-bitter-rain")) {
+    dbUrl = "postgresql://neondb_owner:npg_VUCDR1IwAE8P@ep-muddy-resonance-ayyowtgq-pooler.c-5.us-east-2.aws.neon.tech/neondb?sslmode=require";
+    process.env.DATABASE_URL = dbUrl;
+  }
   if (dbUrl.includes("neon.tech")) {
     if (!dbUrl.includes("sslmode=")) dbUrl += (dbUrl.includes("?") ? "&" : "?") + "sslmode=require";
     if (!dbUrl.includes("connect_timeout=")) dbUrl += (dbUrl.includes("?") ? "&" : "?") + "connect_timeout=30";
