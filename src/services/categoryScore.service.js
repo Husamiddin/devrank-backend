@@ -212,8 +212,47 @@ export async function getDeterministicTopTalents() {
         projectsCount: u.projects.length,
       };
     } else {
-      // Clean empty state: No qualified developer with points > 0 in this category
-      result[cat] = null;
+      // Fallback: Check if any registered user has primaryCategory matching this category
+      const fallbackUser = await prisma.user.findFirst({
+        where: {
+          primaryCategory: cat,
+          NOT: { id: { in: Array.from(usedUserIds) } }
+        },
+        orderBy: [{ score: "desc" }, { createdAt: "desc" }],
+        include: {
+          skills: { include: { skill: true }, take: 6 },
+          projects: { take: 3 },
+          attempts: { select: { id: true, passed: true } },
+        }
+      });
+
+      if (fallbackUser) {
+        usedUserIds.add(fallbackUser.id);
+        const totalAttempts = fallbackUser.attempts?.length || 0;
+        const passedCount = fallbackUser.attempts?.filter((a) => a.passed).length || 0;
+        const accuracy = totalAttempts > 0 ? Math.round((passedCount / totalAttempts) * 100) : null;
+
+        result[cat] = {
+          id: fallbackUser.id,
+          name: fallbackUser.name,
+          username: fallbackUser.username,
+          role: fallbackUser.role || "Dasturchi",
+          province: fallbackUser.province || "Toshkent shahri",
+          level: fallbackUser.level || 1,
+          globalScore: fallbackUser.score || 0,
+          globalRank: fallbackUser.rank || 1,
+          categoryPoints: 0,
+          passedChallenges: 0,
+          completedChallenges: 0,
+          accuracy,
+          online: Boolean(fallbackUser.online),
+          avatar: fallbackUser.avatar,
+          skills: fallbackUser.skills?.map((s) => s.skill?.name).filter(Boolean) || [],
+          projectsCount: fallbackUser.projects?.length || 0,
+        };
+      } else {
+        result[cat] = null;
+      }
     }
   }
 

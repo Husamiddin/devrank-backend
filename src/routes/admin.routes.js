@@ -104,6 +104,38 @@ r.get("/admin/users", verifyAdmin, async (req, res, next) => {
   }
 });
 
+r.delete("/admin/users/:id", verifyAdmin, async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const user = await prisma.user.findUnique({ where: { id } });
+    if (!user) {
+      return res.status(404).json({ message: "Foydalanuvchi topilmadi." });
+    }
+
+    // Safely delete all related records in transaction
+    await prisma.$transaction([
+      prisma.userSkill.deleteMany({ where: { userId: id } }),
+      prisma.challengeAttempt.deleteMany({ where: { userId: id } }),
+      prisma.evaluation.deleteMany({ where: { submission: { userId: id } } }),
+      prisma.submission.deleteMany({ where: { userId: id } }),
+      prisma.projectImage.deleteMany({ where: { project: { userId: id } } }),
+      prisma.project.deleteMany({ where: { userId: id } }),
+      prisma.message.deleteMany({ where: { userId: id } }),
+      prisma.rankSnapshot.deleteMany({ where: { userId: id } }),
+      prisma.userCategoryScore.deleteMany({ where: { userId: id } }),
+      prisma.competitionAnswer.deleteMany({ where: { userId: id } }),
+      prisma.teamMember.deleteMany({ where: { userId: id } }),
+      prisma.shortlistEntry.deleteMany({ where: { userId: id } }),
+      prisma.companyInvitation.deleteMany({ where: { userId: id } }),
+      prisma.user.delete({ where: { id } }),
+    ]);
+
+    res.json({ ok: true, message: `"${user.name}" foydalanuvchisi butunlay o'chirildi.` });
+  } catch (err) {
+    next(err);
+  }
+});
+
 r.post("/admin/messages", verifyAdmin, async (req, res, next) => {
   try {
     const { userId, title, body, type = "admin" } = req.body;
