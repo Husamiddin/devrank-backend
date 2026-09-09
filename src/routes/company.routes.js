@@ -378,7 +378,7 @@ r.get("/company/talent", authenticateCompany, async (req, res, next) => {
     const take = Math.min(100, Math.max(1, Number(limit)));
     const skip = (Math.max(1, Number(page)) - 1) * take;
 
-    const [total, users] = await Promise.all([
+    const [total, users, allInfractionMessages] = await Promise.all([
       prisma.user.count({ where }),
       prisma.user.findMany({
         where,
@@ -391,9 +391,39 @@ r.get("/company/talent", authenticateCompany, async (req, res, next) => {
           attempts: { select: { id: true, passed: true, score: true } },
           categoryScores: true,
           shortlists: { where: { companyId } },
+          teamMemberships: {
+            include: {
+              team: {
+                select: {
+                  id: true,
+                  name: true,
+                  rank: true,
+                  score: true,
+                  competitionId: true,
+                },
+              },
+            },
+          },
+          competitionAnswers: {
+            select: {
+              id: true,
+              correct: true,
+              points: true,
+              question: { select: { competitionId: true } },
+            },
+          },
         },
       }),
+      prisma.message.findMany({
+        where: { title: { contains: "chetlatil" } },
+        select: { userId: true },
+      }),
     ]);
+
+    const infractionCountByUser = {};
+    allInfractionMessages.forEach((m) => {
+      infractionCountByUser[m.userId] = (infractionCountByUser[m.userId] || 0) + 1;
+    });
 
     // Format candidate list
     const candidates = await Promise.all(
@@ -420,6 +450,28 @@ r.get("/company/talent", authenticateCompany, async (req, res, next) => {
         const passedAttempts = u.attempts.filter((a) => a.passed).length;
         const accuracy = totalAttempts > 0 ? Math.round((passedAttempts / totalAttempts) * 100) : null;
 
+        // REAL competition participation: answered at least 1 question
+        const activeCompIds = new Set(
+          (u.competitionAnswers || []).map((a) => a.question?.competitionId).filter(Boolean)
+        );
+        const competitionsCount = activeCompIds.size;
+
+        // REAL wins: team rank is 1 AND user answered at least 1 question correctly in that competition
+        const wonCompetitions = (u.teamMemberships || []).filter((m) => {
+          if (m.team?.rank !== 1) return false;
+          const compId = m.team?.competitionId;
+          if (!compId) return false;
+          return (u.competitionAnswers || []).some(
+            (a) => a.question?.competitionId === compId && a.correct
+          );
+        }).length;
+
+        // Suspicion / Infractions history (never resets to 0 even if reinstated)
+        const isCurrentlyDisqualified = (u.teamMemberships || []).some((m) => m.disqualified);
+        const pastInfractionCount = infractionCountByUser[u.id] || 0;
+        const totalSuspicionCount = pastInfractionCount + (isCurrentlyDisqualified ? 1 : 0);
+        const isClean = !isCurrentlyDisqualified && pastInfractionCount === 0;
+
         return {
           id: u.id,
           name: u.name,
@@ -440,6 +492,12 @@ r.get("/company/talent", authenticateCompany, async (req, res, next) => {
           accuracy,
           shortlistStatus: u.shortlists?.[0]?.status || null,
           shortlistId: u.shortlists?.[0]?.id || null,
+          competitionsCount,
+          wonCompetitionsCount: wonCompetitions,
+          isClean,
+          suspicionCount: totalSuspicionCount,
+          isCurrentlyDisqualified,
+          wasReinstated: !isCurrentlyDisqualified && pastInfractionCount > 0,
         };
       })
     );
@@ -492,6 +550,41 @@ r.get("/company/talent/:id", authenticateCompany, async (req, res, next) => {
           orderBy: { createdAt: "desc" },
           take: 20,
         },
+        teamMemberships: {
+          include: {
+            team: {
+              include: {
+                competition: {
+                  select: {
+                    id: true,
+                    title: true,
+                    category: true,
+                    status: true,
+                    startsAt: true,
+                    endsAt: true,
+                  },
+                },
+              },
+            },
+          },
+          orderBy: { joinedAt: "desc" },
+        },
+        competitionAnswers: {
+          include: {
+            question: {
+              select: {
+                id: true,
+                orderIndex: true,
+                difficulty: true,
+                type: true,
+                question: true,
+                points: true,
+                competitionId: true,
+              },
+            },
+          },
+          orderBy: { createdAt: "desc" },
+        },
         categoryScores: true,
         shortlists: { where: { companyId } },
         invitations: { where: { companyId } },
@@ -529,6 +622,45 @@ r.get("/company/talent/:id", authenticateCompany, async (req, res, next) => {
     const passedAttempts = user.attempts.filter((a) => a.passed).length;
     const accuracy = totalAttempts > 0 ? Math.round((passedAttempts / totalAttempts) * 100) : null;
 
+    const isDisqualifiedAny = (user.teamMemberships || []).some((m) => m.disqualified);
+    const pastInfractions = await prisma.message.findMany({
+      where: { userId: user.id, title: { contains: "chetlatil" } },
+      orderBy: { createdAt: "desc" },
+    });
+
+    const disqualificationRecords = [
+      ...(user.teamMemberships || [])
+        .filter((m) => m.disqualified)
+        .map((m) => ({
+          competitionTitle: m.team?.competition?.title || "Musobaqa",
+          reason: m.disqualifiedReason || "Shubhali harakat / qoidabuzarlik",
+          date: m.joinedAt,
+          status: "Faol chetlatilgan",
+        })),
+      ...pastInfractions.map((msg) => ({
+        competitionTitle: "Olimpiada / Musobaqa",
+        reason: msg.body?.replace(/^Siz [^:]+:\s*/, "") || "Shubhali harakat",
+        date: msg.createdAt,
+        status: "Qayta tiklangan (Tarix)",
+      })),
+    ];
+
+    const isClean = !isDisqualifiedAny && pastInfractions.length === 0;
+
+    const activeCompIds = new Set(
+      (user.competitionAnswers || []).map((a) => a.question?.competitionId).filter(Boolean)
+    );
+    const realCompetitionsCount = activeCompIds.size;
+
+    const wonCompetitions = (user.teamMemberships || []).filter((m) => {
+      if (m.team?.rank !== 1) return false;
+      const compId = m.team?.competitionId;
+      if (!compId) return false;
+      return (user.competitionAnswers || []).some(
+        (a) => a.question?.competitionId === compId && a.correct
+      );
+    }).length;
+
     res.json({
       success: true,
       candidate: {
@@ -550,6 +682,12 @@ r.get("/company/talent/:id", authenticateCompany, async (req, res, next) => {
         categoryPoints: catPoints,
         categoryDetails: catDetails,
         accuracy,
+        isClean,
+        isCurrentlyDisqualified: isDisqualifiedAny,
+        suspicionCount: pastInfractions.length + (isDisqualifiedAny ? 1 : 0),
+        disqualificationRecords,
+        competitionsCount: realCompetitionsCount,
+        wonCompetitionsCount: wonCompetitions,
         skills: user.skills.map((s) => s.skill?.name).filter(Boolean),
         projects: user.projects.map((p) => ({
           id: p.id,
@@ -569,10 +707,137 @@ r.get("/company/talent/:id", authenticateCompany, async (req, res, next) => {
           score: a.score,
           createdAt: a.createdAt,
         })),
+        competitions: (user.teamMemberships || []).map((m) => ({
+          id: m.id,
+          competitionId: m.team?.competition?.id,
+          competitionTitle: m.team?.competition?.title,
+          category: m.team?.competition?.category,
+          status: m.team?.competition?.status,
+          teamName: m.team?.name,
+          teamRank: m.team?.rank,
+          teamScore: m.team?.score,
+          role: m.role,
+          disqualified: m.disqualified,
+          disqualifiedReason: m.disqualifiedReason,
+          joinedAt: m.joinedAt,
+        })),
         shortlist: user.shortlists?.[0] || null,
         invitations: user.invitations || [],
       },
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ----------------- COMPETITIONS LEADERBOARDS & STARS -----------------
+r.get("/company/competitions", authenticateCompany, async (req, res, next) => {
+  try {
+    const [competitions, allAnswers] = await Promise.all([
+      prisma.competition.findMany({
+        orderBy: { startsAt: "desc" },
+        include: {
+          _count: {
+            select: { questions: true, teams: true },
+          },
+          teams: {
+            orderBy: { score: "desc" },
+            include: {
+              members: {
+                include: {
+                  user: {
+                    select: {
+                      id: true,
+                      name: true,
+                      role: true,
+                      level: true,
+                      score: true,
+                      phone: true,
+                      telegram: true,
+                      online: true,
+                      province: true,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      }),
+      prisma.competitionAnswer.findMany({
+        select: {
+          userId: true,
+          correct: true,
+          points: true,
+          question: { select: { competitionId: true } },
+        },
+      }),
+    ]);
+
+    // Format competitions and filter out inactive members
+    const formattedCompetitions = competitions.map((comp) => {
+      const compAnswers = allAnswers.filter((a) => a.question?.competitionId === comp.id);
+      const userAnswersMap = {};
+      compAnswers.forEach((a) => {
+        if (!userAnswersMap[a.userId]) {
+          userAnswersMap[a.userId] = { total: 0, correct: 0, points: 0 };
+        }
+        userAnswersMap[a.userId].total += 1;
+        if (a.correct) {
+          userAnswersMap[a.userId].correct += 1;
+          userAnswersMap[a.userId].points += a.points || 0;
+        }
+      });
+
+      const teams = comp.teams.map((team, idx) => {
+        // Only keep members who actually answered at least 1 question
+        const activeMembers = team.members
+          .map((m) => {
+            const stats = userAnswersMap[m.userId] || { total: 0, correct: 0, points: 0 };
+            return {
+              id: m.id,
+              userId: m.userId,
+              role: m.role,
+              disqualified: m.disqualified,
+              disqualifiedReason: m.disqualifiedReason,
+              contactPhone: m.contactPhone,
+              telegram: m.telegram,
+              user: m.user,
+              totalAnswers: stats.total,
+              solvedCount: stats.correct,
+              pointsEarned: stats.points,
+              activeInCompetition: stats.total > 0,
+            };
+          })
+          .filter((m) => m.activeInCompetition)
+          .sort((a, b) => b.pointsEarned - a.pointsEarned || b.solvedCount - a.solvedCount);
+
+        return {
+          ...team,
+          members: activeMembers,
+          activeMemberCount: activeMembers.length,
+          isWinner: idx === 0 || team.rank === 1,
+        };
+      });
+
+      const totalActiveParticipants = teams.reduce((acc, t) => acc + t.members.length, 0);
+
+      return {
+        id: comp.id,
+        title: comp.title,
+        description: comp.description,
+        rules: comp.rules || "Halol kod yozish, vaqt chegarasiga rioya qilish.",
+        category: comp.category,
+        status: comp.status,
+        startsAt: comp.startsAt,
+        endsAt: comp.endsAt,
+        questionsCount: comp._count?.questions || 50,
+        totalActiveParticipants,
+        teams,
+      };
+    });
+
+    res.json({ ok: true, success: true, competitions: formattedCompetitions });
   } catch (err) {
     next(err);
   }
