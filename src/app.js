@@ -20,7 +20,7 @@ export const app=express();
 const dirs=[path.resolve(process.env.UPLOAD_DIR||"uploads","projects"),path.resolve(process.env.UPLOAD_DIR||"uploads","avatars")];for(const d of dirs)fs.mkdirSync(d,{recursive:true});
 const origins=(process.env.FRONTEND_URL||"http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001,http://localhost:3002,http://127.0.0.1:3002,http://localhost:5173").split(",").map(x=>x.trim()).filter(Boolean);
 app.use(helmet({crossOriginResourcePolicy:{policy:"cross-origin"}}));
-app.use(cors({origin:(o,cb)=>{if(!o)return cb(null,true);if(origins.includes(o))return cb(null,true);if(/^http:\/\/(localhost|127\.0\.0\.1|172\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+)(:\d+)?$/.test(o))return cb(null,true);return cb(null,false)},credentials:true}));
+app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({limit:"2mb"}));
 app.use(express.urlencoded({extended:true,limit:"2mb"}));
 const limiterSafeReads=new Set(["/api/profile","/api/stats","/api/leaderboard","/api/challenges","/api/news","/api/events","/api/messages","/api/competitions"]);
