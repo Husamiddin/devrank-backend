@@ -48,12 +48,15 @@ r.post("/admin/login", (req, res) => {
 
 r.get("/admin/stats", verifyAdmin, async (req, res, next) => {
   try {
-    const [usersCount, submissionsCount, challengesCount, competitionsCount, activeUsers] = await Promise.all([
+    const [usersCount, submissionsCount, challengesCount, competitionsCount, activeUsers, companiesCount, jobsCount, projectsCount] = await Promise.all([
       prisma.user.count(),
       prisma.submission.count(),
       prisma.challenge.count(),
       prisma.competition.count(),
-      prisma.user.count({ where: { online: true } })
+      prisma.user.count({ where: { online: true } }),
+      prisma.company.count(),
+      prisma.job.count({ where: { status: "ACTIVE" } }),
+      prisma.project.count()
     ]);
 
     res.json({
@@ -61,7 +64,10 @@ r.get("/admin/stats", verifyAdmin, async (req, res, next) => {
       submissionsCount,
       challengesCount,
       competitionsCount,
-      activeUsers
+      activeUsers,
+      companiesCount,
+      jobsCount,
+      projectsCount
     });
   } catch (err) {
     next(err);
@@ -86,7 +92,6 @@ r.get("/admin/users", verifyAdmin, async (req, res, next) => {
         online: true,
         createdAt: true,
         passwordHash: true,
-        plainPassword: true,
         projectsCount: true,
         _count: {
           select: { submissions: true, attempts: true }
@@ -632,5 +637,84 @@ r.post("/admin/users/:id/points", verifyAdmin, async (req, res, next) => {
   }
 });
 
-export default r;
+// ─── COMPANY MANAGEMENT ───
 
+// GET /api/admin/companies — Barcha kompaniyalar ro'yxati
+r.get("/admin/companies", verifyAdmin, async (req, res, next) => {
+  try {
+    const companies = await prisma.company.findMany({
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        companyName: true,
+        legalName: true,
+        email: true,
+        phone: true,
+        website: true,
+        industry: true,
+        companySize: true,
+        city: true,
+        country: true,
+        logo: true,
+        status: true,
+        createdAt: true,
+        updatedAt: true,
+        _count: {
+          select: { members: true, jobs: true, shortlists: true, invitations: true }
+        }
+      }
+    });
+    res.json({ companies });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PATCH /api/admin/companies/:id/status — Kompaniya statusini o'zgartirish
+r.patch("/admin/companies/:id/status", verifyAdmin, async (req, res, next) => {
+  try {
+    const { status } = req.body;
+    const allowed = ["PENDING", "VERIFIED", "REJECTED", "SUSPENDED"];
+    if (!status || !allowed.includes(status)) {
+      return res.status(400).json({
+        message: `Status noto'g'ri. Ruxsat etilganlar: ${allowed.join(", ")}`
+      });
+    }
+
+    const company = await prisma.company.findUnique({ where: { id: req.params.id } });
+    if (!company) {
+      return res.status(404).json({ message: "Kompaniya topilmadi." });
+    }
+
+    const updated = await prisma.company.update({
+      where: { id: req.params.id },
+      data: { status },
+      select: { id: true, companyName: true, email: true, status: true }
+    });
+
+    res.json({
+      ok: true,
+      company: updated,
+      message: `"${updated.companyName}" kompaniyasi statusi "${status}" ga o'zgartirildi.`
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// DELETE /api/admin/companies/:id — Kompaniyani o'chirish (faqat superadmin)
+r.delete("/admin/companies/:id", verifyAdmin, async (req, res, next) => {
+  try {
+    const company = await prisma.company.findUnique({ where: { id: req.params.id } });
+    if (!company) {
+      return res.status(404).json({ message: "Kompaniya topilmadi." });
+    }
+
+    await prisma.company.delete({ where: { id: req.params.id } });
+    res.json({ ok: true, message: `"${company.companyName}" kompaniyasi o'chirildi.` });
+  } catch (err) {
+    next(err);
+  }
+});
+
+export default r;

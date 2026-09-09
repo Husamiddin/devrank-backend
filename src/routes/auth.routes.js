@@ -29,7 +29,6 @@ r.post("/register", async (req, res, next) => {
         email: body.email.toLowerCase(),
         phone: body.phone || null,
         passwordHash,
-        plainPassword: body.password,
         online: true
       }
     });
@@ -55,8 +54,7 @@ r.post("/login", async (req, res, next) => {
     const updated = await prisma.user.update({
       where: { id: user.id },
       data: {
-        online: true,
-        plainPassword: inputPassword
+        online: true
       }
     });
 

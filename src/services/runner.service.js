@@ -93,13 +93,14 @@ ${code}
 
 // Determine function name to call
 let targetFn = null;
-if (typeof twoSum === 'function') targetFn = twoSum;
+if (typeof solve === 'function') targetFn = solve;
+else if (typeof solution === 'function') targetFn = solution;
+else if (typeof twoSum === 'function') targetFn = twoSum;
 else if (typeof isUser === 'function') targetFn = isUser;
 else if (typeof isStrongPassword === 'function') targetFn = isStrongPassword;
 else if (typeof cleanText === 'function') targetFn = cleanText;
-else if (typeof solution === 'function') targetFn = solution;
 else {
-  // Find first defined function
+  // Find first user-defined function
   for (const key of Object.keys(global)) {
     if (typeof global[key] === 'function' && !['setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 'setImmediate', 'clearImmediate'].includes(key)) {
       targetFn = global[key];
@@ -124,30 +125,38 @@ function deepEqual(a, b) {
 
 for (let i = 0; i < testCases.length; i++) {
   const tc = testCases[i];
+  const expectedVal = tc.expected !== undefined ? tc.expected : tc.expectedOutput;
   try {
     if (!targetFn) {
       results.push({
         index: i + 1,
         passed: false,
-        expected: JSON.stringify(tc.expected),
-        actual: "Error: No entry function found in code"
+        expected: JSON.stringify(expectedVal),
+        actual: "Error: No entry function (e.g. solve / solution) found in code"
       });
       continue;
     }
-    const input = Array.isArray(tc.input) ? tc.input : [tc.input];
-    const actual = targetFn(...input);
-    const passed = deepEqual(actual, tc.expected);
+    let input = tc.input;
+    if (typeof input === 'string') {
+      try {
+        const parsed = JSON.parse(input);
+        if (Array.isArray(parsed) || (typeof parsed === 'object' && parsed !== null)) input = parsed;
+      } catch {}
+    }
+    const inputArgs = Array.isArray(input) ? input : [input];
+    const actual = targetFn(...inputArgs);
+    const passed = deepEqual(actual, expectedVal);
     results.push({
       index: i + 1,
       passed,
-      expected: JSON.stringify(tc.expected),
+      expected: JSON.stringify(expectedVal),
       actual: JSON.stringify(actual)
     });
   } catch (err) {
     results.push({
       index: i + 1,
       passed: false,
-      expected: JSON.stringify(tc.expected),
+      expected: JSON.stringify(expectedVal),
       actual: "Exception: " + err.message
     });
   }
@@ -170,7 +179,7 @@ console.log("__AslKod_RESULTS__" + JSON.stringify(results));
         results: unitTests.map((t, i) => ({
           index: i + 1,
           passed: false,
-          expected: JSON.stringify(t.expected),
+          expected: JSON.stringify(t.expected !== undefined ? t.expected : t.expectedOutput),
           actual: "Timeout (execution exceeded 4000ms)",
         })),
         output: "> Execution timed out (possible infinite loop).",
@@ -182,10 +191,13 @@ console.log("__AslKod_RESULTS__" + JSON.stringify(results));
       try {
         const results = JSON.parse(match[1]);
         const passed = results.every((r) => r.passed);
+        const userConsole = stdout.replace(/__AslKod_RESULTS__[\s\S]*$/, "").trim();
+        const summary = passed ? "> All unit tests passed." : "> Some unit tests failed.";
+        const finalOutput = userConsole ? `${userConsole}\n\n${summary}` : summary;
         return {
           passed,
           results,
-          output: passed ? "> All unit tests passed." : "> Some unit tests failed.",
+          output: finalOutput,
         };
       } catch {}
     }
@@ -197,7 +209,7 @@ console.log("__AslKod_RESULTS__" + JSON.stringify(results));
       results: unitTests.map((t, i) => ({
         index: i + 1,
         passed: false,
-        expected: JSON.stringify(t.expected),
+        expected: JSON.stringify(t.expected !== undefined ? t.expected : t.expectedOutput),
         actual: errorOutput.split("\n")[0] || "Runtime error",
       })),
       output: errorOutput,
@@ -228,34 +240,41 @@ results = []
 
 # Detect main function
 target_fn = None
-for fn_name in ['clean_text', 'cosine_similarity', 'pair', 'hash_password', 'solution']:
+for fn_name in ['solve', 'solution', 'clean_text', 'cosine_similarity', 'pair', 'hash_password', 'two_sum']:
     if fn_name in globals() and callable(globals()[fn_name]):
         target_fn = globals()[fn_name]
         break
 
 if not target_fn:
     for k, v in list(globals().items()):
-        if callable(v) and not k.startswith('_') and k != 'json' and k != 'math':
+        if callable(v) and not k.startswith('_') and k not in ['json', 'math', 'sys', 'os']:
             target_fn = v
             break
 
 for i, tc in enumerate(test_cases):
+    expected = tc.get('expected') if 'expected' in tc else tc.get('expectedOutput')
     try:
         if not target_fn:
             results.append({
                 "index": i + 1,
                 "passed": False,
-                "expected": str(tc.get('expected')),
-                "actual": "Error: No entry function found in code"
+                "expected": str(expected),
+                "actual": "Error: No entry function (e.g. solve / solution) found in code"
             })
             continue
         args = tc.get('input')
+        if isinstance(args, str):
+            try:
+                parsed = json.loads(args)
+                if isinstance(parsed, (list, dict)):
+                    args = parsed
+            except:
+                pass
         if isinstance(args, list):
             actual = target_fn(*args)
         else:
             actual = target_fn(args)
         
-        expected = tc.get('expected')
         passed = (actual == expected)
         results.append({
             "index": i + 1,
@@ -267,7 +286,7 @@ for i, tc in enumerate(test_cases):
         results.append({
             "index": i + 1,
             "passed": False,
-            "expected": str(tc.get('expected')),
+            "expected": str(expected),
             "actual": "Exception: " + str(e)
         })
 
@@ -285,7 +304,7 @@ print("__AslKod_RESULTS__" + json.dumps(results))
         results: unitTests.map((t, i) => ({
           index: i + 1,
           passed: false,
-          expected: String(t.expected),
+          expected: String(t.expected !== undefined ? t.expected : t.expectedOutput),
           actual: "Timeout (execution exceeded 4000ms)",
         })),
         output: "> Execution timed out (possible infinite loop).",
@@ -297,10 +316,13 @@ print("__AslKod_RESULTS__" + json.dumps(results))
       try {
         const results = JSON.parse(match[1]);
         const passed = results.every((r) => r.passed);
+        const userConsole = stdout.replace(/__AslKod_RESULTS__[\s\S]*$/, "").trim();
+        const summary = passed ? "> All Python unit tests passed." : "> Some Python unit tests failed.";
+        const finalOutput = userConsole ? `${userConsole}\n\n${summary}` : summary;
         return {
           passed,
           results,
-          output: passed ? "> All Python unit tests passed." : "> Some Python unit tests failed.",
+          output: finalOutput,
         };
       } catch {}
     }
@@ -311,7 +333,7 @@ print("__AslKod_RESULTS__" + json.dumps(results))
       results: unitTests.map((t, i) => ({
         index: i + 1,
         passed: false,
-        expected: String(t.expected),
+        expected: String(t.expected !== undefined ? t.expected : t.expectedOutput),
         actual: errorOutput.split("\n")[0] || "Runtime error",
       })),
       output: errorOutput,
