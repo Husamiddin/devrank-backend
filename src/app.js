@@ -31,5 +31,16 @@ app.get("/",(_req,res)=>res.json({name:"AslKod UZ API",status:"ok",version:"3.0.
 app.get("/api/health",(_req,res)=>res.json({ok:true,service:"AslKod-api",database:dbState,time:new Date().toISOString()}));
 app.use("/api",auth,profile,users,leaderboard,content,dashboard,challenges,projects,admin,competitions,company);
 app.use((req,res)=>res.status(404).json({message:"Route topilmadi.",path:req.path}));
-app.use((e,_req,res,_next)=>{console.error(e);if(e?.name==="ZodError")return res.status(400).json({message:"Validatsiya xatosi",issues:e.issues});if(e?.code==="P2002")return res.status(409).json({message:"Bu qiymat allaqachon mavjud."});if(e?.code==="P2025")return res.status(404).json({message:"Ma'lumot topilmadi."});if(Number.isInteger(e?.status))return res.status(e.status).json({message:e.message});res.status(500).json({message:process.env.NODE_ENV==="production"?"Internal server error":e?.message||"Internal server error"})});
+app.use((e,_req,res,_next)=>{
+  console.error(e);
+  if(e?.name==="ZodError")return res.status(400).json({message:"Validatsiya xatosi",issues:e.issues});
+  if(e?.code==="P2002")return res.status(409).json({message:"Bu qiymat allaqachon mavjud."});
+  if(e?.code==="P2025")return res.status(404).json({message:"Ma'lumot topilmadi."});
+  if(e?.code==="P1001"||e?.message?.includes("Can't reach database server")||e?.message?.includes("quota")) {
+    const detail = dbState?.initSqlError ? ` (${dbState.initSqlError})` : "";
+    return res.status(503).json({message: `Ma'lumotlar bazasiga ulanib bo‘lmadi${detail}. Iltimos, ma'lumotlar bazasini tekshiring.`});
+  }
+  if(Number.isInteger(e?.status))return res.status(e.status).json({message:e.message});
+  res.status(500).json({message:e?.message||"Ichki server xatoligi."})
+});
 
