@@ -187,15 +187,18 @@ model Challenge {
 }
 
 model ChallengeAttempt {
-  id          String   @id @default(cuid())
-  userId      String
-  challengeId String
-  passed      Boolean  @default(false)
-  score       Int      @default(0)
-  attempts    Int      @default(0)
-  status      String   @default("ACTIVE")
-  feedback    String?  @db.Text
-  createdAt   DateTime @default(now())
+  id              String   @id @default(cuid())
+  userId          String
+  challengeId     String
+  passed          Boolean  @default(false)
+  score           Int      @default(0)
+  attempts        Int      @default(0)
+  status          String   @default("ACTIVE")
+  feedback        String?  @db.Text
+  isSuspicious    Boolean  @default(false)
+  suspicionReason String?
+  tabSwitches     Int      @default(0)
+  createdAt       DateTime @default(now())
 
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   challenge Challenge @relation(fields: [challengeId], references: [id], onDelete: Cascade)
@@ -203,6 +206,7 @@ model ChallengeAttempt {
   @@unique([userId, challengeId])
   @@index([userId, createdAt])
   @@index([challengeId, createdAt])
+  @@index([isSuspicious])
 }
 
 model RankSnapshot {
@@ -257,6 +261,7 @@ model Message {
   type      String   @default("system")
   title     String
   body      String   @db.Text
+  data      Json?
   read      Boolean  @default(false)
   createdAt DateTime @default(now())
 
@@ -394,6 +399,7 @@ model Company {
   legalName    String?
   email        String   @unique
   phone        String?
+  telegramUsername String?
   website      String?
   description  String?  @db.Text
   industry     String?  @default("IT / Software")
@@ -485,14 +491,16 @@ model ShortlistEntry {
 }
 
 model CompanyInvitation {
-  id        String   @id @default(cuid())
-  companyId String
-  userId    String
-  jobId     String?
-  message   String   @db.Text
-  status    String   @default("PENDING") // PENDING, ACCEPTED, DECLINED, EXPIRED
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id               String   @id @default(cuid())
+  companyId        String
+  userId           String
+  jobId            String?
+  message          String   @db.Text
+  status           String   @default("PENDING") // PENDING, ACCEPTED, DECLINED, INTERVIEW_OFFERED, INTERVIEW_CONFIRMED, EXPIRED
+  interviewDetails Json?
+  userSelectedTime String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)

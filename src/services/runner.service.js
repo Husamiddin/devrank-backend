@@ -38,6 +38,10 @@ export async function executeCodeTests({ code, language, challenge }) {
     return runCppTests(code, unitTests);
   }
 
+  if (lang === "react" || lang === "jsx") {
+    return runReactChecks(code, unitTests, tests);
+  }
+
   // fallback static
   return executeStaticChecks(code, tests);
 }
@@ -598,6 +602,39 @@ int main() {
       await fs.rm(tmpDir, { recursive: true, force: true });
     } catch {}
   }
+}
+
+/**
+ * Validates React JSX / TSX code components
+ */
+function runReactChecks(code, unitTests, tests) {
+  const hasFunctionOrClass = /(function\s+[A-Za-z0-9_]+|const\s+[A-Za-z0-9_]+\s*=\s*(\([^)]*\)|[A-Za-z0-9_]+)\s*=>|class\s+[A-Za-z0-9_]+\s+extends)/.test(code);
+  const hasReturnJsx = /return\s*\(?[\s\S]*<[A-Za-z0-9_]+/m.test(code) || /<[A-Za-z0-9_]+[\s\S]*\/>/.test(code);
+  const hasReactUsage = /React|useState|useEffect|useMemo|useCallback|render|export\s+default/i.test(code) || hasReturnJsx;
+
+  const passed = hasFunctionOrClass && (hasReturnJsx || hasReactUsage);
+  const results = [
+    {
+      index: 1,
+      passed: hasFunctionOrClass,
+      expected: "React komponent strukturasi mavjud bo'lishi",
+      actual: hasFunctionOrClass ? "Komponent aniqlandi" : "Komponent funksiyasi topilmadi"
+    },
+    {
+      index: 2,
+      passed: Boolean(hasReturnJsx || hasReactUsage),
+      expected: "JSX elementi yoki React hook qaytarilishi",
+      actual: (hasReturnJsx || hasReactUsage) ? "JSX muvaffaqiyatli aniqlandi" : "JSX sintaksisi topilmadi"
+    }
+  ];
+
+  return {
+    passed,
+    results,
+    output: passed
+      ? "> React komponenti muvaffaqiyatli tahlil qilindi va qabul qilindi."
+      : "> React komponentida JSX yoki eksport sintaksisi yetarli emas."
+  };
 }
 
 

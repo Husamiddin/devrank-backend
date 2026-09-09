@@ -35,7 +35,7 @@ r.get("/challenges", auth, async (req, res, next) => {
         userId: req.user.id,
         challengeId: { in: items.map((x) => x.id) }
       },
-      select: { challengeId: true, passed: true, score: true, status: true, attempts: true }
+      select: { challengeId: true, passed: true, score: true, status: true, attempts: true, isSuspicious: true, suspicionReason: true }
     });
 
     const map = new Map(attempts.map((x) => [x.challengeId, x]));
@@ -75,6 +75,8 @@ r.get("/challenges", auth, async (req, res, next) => {
           status: attemptData?.status || "ACTIVE",
           attempts: attemptData?.attempts || 0,
           bestScore: attemptData?.score || 0,
+          isSuspicious: Boolean(attemptData?.isSuspicious),
+          suspicionReason: attemptData?.suspicionReason || null,
           hasQuiz: Boolean(quiz),
           locked: isLevelLocked || isLockedByAttempts
         };
@@ -89,6 +91,43 @@ r.get("/challenges", auth, async (req, res, next) => {
     });
   } catch (e) {
     next(e);
+  }
+});
+
+r.post("/challenges/:id/flag-suspicious", auth, async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const reason = String(req.body.reason || "Oynadan chiqib ketish / Tab almashtirish");
+
+    const challenge = await prisma.challenge.findUnique({ where: { id } });
+    if (!challenge) {
+      return res.status(404).json({ message: "Challenge topilmadi." });
+    }
+
+    const attempt = await prisma.challengeAttempt.upsert({
+      where: {
+        userId_challengeId: { userId: req.user.id, challengeId: id }
+      },
+      update: {
+        isSuspicious: true,
+        suspicionReason: reason,
+        tabSwitches: { increment: 1 }
+      },
+      create: {
+        userId: req.user.id,
+        challengeId: id,
+        passed: false,
+        score: 0,
+        isSuspicious: true,
+        suspicionReason: reason,
+        tabSwitches: 1,
+        status: "ACTIVE"
+      }
+    });
+
+    res.json({ ok: true, isSuspicious: true, suspicionReason: reason, attempt });
+  } catch (err) {
+    next(err);
   }
 });
 
@@ -269,6 +308,9 @@ r.post("/challenges/:id/submit", auth, submitLimiter, async (req, res, next) => 
         }
       });
 
+      const suspicious = Boolean(prevAttempt?.isSuspicious || req.body.isSuspicious || isCheatDetected);
+      const sReason = prevAttempt?.suspicionReason || (req.body.isSuspicious ? "Oynadan chiqib ketish / Tab almashtirish" : (isCheatDetected ? "AI Anti-Cheat aniqladi" : null));
+
       await tx.challengeAttempt.upsert({
         where: {
           userId_challengeId: { userId: req.user.id, challengeId: challenge.id }
@@ -279,6 +321,8 @@ r.post("/challenges/:id/submit", auth, submitLimiter, async (req, res, next) => 
           attempts: attemptsCount,
           status: updatedStatus,
           feedback: aiReview.feedback,
+          isSuspicious: suspicious,
+          suspicionReason: sReason,
           createdAt: new Date()
         },
         create: {
@@ -288,7 +332,9 @@ r.post("/challenges/:id/submit", auth, submitLimiter, async (req, res, next) => 
           score: earnedPoints,
           attempts: attemptsCount,
           status: updatedStatus,
-          feedback: aiReview.feedback
+          feedback: aiReview.feedback,
+          isSuspicious: suspicious,
+          suspicionReason: sReason
         }
       });
 

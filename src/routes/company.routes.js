@@ -2,6 +2,7 @@ import { Router } from "express";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
+import { auth } from "../middleware/auth.js";
 import { prisma } from "../lib/prisma.js";
 import {
   computeCategoryScoresForUser,
@@ -388,7 +389,7 @@ r.get("/company/talent", authenticateCompany, async (req, res, next) => {
         include: {
           skills: { include: { skill: true }, take: 6 },
           projects: { take: 3 },
-          attempts: { select: { id: true, passed: true, score: true } },
+          attempts: { select: { id: true, passed: true, score: true, isSuspicious: true } },
           categoryScores: true,
           shortlists: { where: { companyId } },
           teamMemberships: {
@@ -428,35 +429,22 @@ r.get("/company/talent", authenticateCompany, async (req, res, next) => {
     // Format candidate list
     const candidates = await Promise.all(
       users.map(async (u) => {
-        // Map category points
-        const catPoints = { web: 0, ai: 0, cyber: 0, ux: 0 };
-        u.categoryScores.forEach((cs) => {
-          if (catPoints[cs.category] !== undefined) {
-            catPoints[cs.category] = cs.points;
-          }
-        });
-
-        // Ensure category baseline from global score if not yet initialized
-        if (Object.values(catPoints).every((v) => v === 0) && u.score > 0) {
-          const comp = await computeCategoryScoresForUser(u.id);
-          if (comp) {
-            Object.keys(comp).forEach((k) => {
-              catPoints[k] = comp[k].points;
-            });
-          }
+        let catScores = u.categoryScores;
+        if (catScores.length === 0) {
+          await computeCategoryScoresForUser(u.id);
+          catScores = await prisma.userCategoryScore.findMany({ where: { userId: u.id } });
         }
 
-        const totalAttempts = u.attempts.length;
-        const passedAttempts = u.attempts.filter((a) => a.passed).length;
-        const accuracy = totalAttempts > 0 ? Math.round((passedAttempts / totalAttempts) * 100) : null;
+        const catPoints = { web: 0, ai: 0, cyber: 0, ux: 0 };
+        catScores.forEach((cs) => {
+          if (catPoints[cs.category] !== undefined) catPoints[cs.category] = cs.points;
+        });
 
-        // REAL competition participation: answered at least 1 question
         const activeCompIds = new Set(
           (u.competitionAnswers || []).map((a) => a.question?.competitionId).filter(Boolean)
         );
         const competitionsCount = activeCompIds.size;
 
-        // REAL wins: team rank is 1 AND user answered at least 1 question correctly in that competition
         const wonCompetitions = (u.teamMemberships || []).filter((m) => {
           if (m.team?.rank !== 1) return false;
           const compId = m.team?.competitionId;
@@ -466,11 +454,15 @@ r.get("/company/talent", authenticateCompany, async (req, res, next) => {
           );
         }).length;
 
-        // Suspicion / Infractions history (never resets to 0 even if reinstated)
+        const totalAttempts = u.attempts.length;
+        const passedAttempts = u.attempts.filter((a) => a.passed).length;
+        const accuracy = totalAttempts > 0 ? Math.round((passedAttempts / totalAttempts) * 100) : null;
+
         const isCurrentlyDisqualified = (u.teamMemberships || []).some((m) => m.disqualified);
         const pastInfractionCount = infractionCountByUser[u.id] || 0;
-        const totalSuspicionCount = pastInfractionCount + (isCurrentlyDisqualified ? 1 : 0);
-        const isClean = !isCurrentlyDisqualified && pastInfractionCount === 0;
+        const challengeSuspicionCount = (u.attempts || []).filter((a) => a.isSuspicious).length;
+        const totalSuspicionCount = pastInfractionCount + (isCurrentlyDisqualified ? 1 : 0) + challengeSuspicionCount;
+        const isClean = !isCurrentlyDisqualified && pastInfractionCount === 0 && challengeSuspicionCount === 0;
 
         return {
           id: u.id,
@@ -548,7 +540,7 @@ r.get("/company/talent/:id", authenticateCompany, async (req, res, next) => {
             },
           },
           orderBy: { createdAt: "desc" },
-          take: 20,
+          take: 100,
         },
         teamMemberships: {
           include: {
@@ -705,6 +697,8 @@ r.get("/company/talent/:id", authenticateCompany, async (req, res, next) => {
           difficulty: a.challenge?.difficulty || "medium",
           passed: a.passed,
           score: a.score,
+          isSuspicious: Boolean(a.isSuspicious),
+          suspicionReason: a.suspicionReason || null,
           createdAt: a.createdAt,
         })),
         competitions: (user.teamMemberships || []).map((m) => ({
@@ -954,6 +948,32 @@ r.post("/company/jobs", authenticateCompany, async (req, res, next) => {
         status: "ACTIVE",
       },
     });
+
+    // Send broadcast notification to all platform users
+    try {
+      const company = await prisma.company.findUnique({ where: { id: companyId } });
+      const allUsers = await prisma.user.findMany({ select: { id: true } });
+      if (allUsers.length > 0) {
+        await prisma.message.createMany({
+          data: allUsers.map((u) => ({
+            userId: u.id,
+            type: "job_broadcast",
+            title: `💼 Yangi Vakansiya: ${job.title} (${company?.companyName || "Hamkor Kompaniya"})`,
+            body: `Kompaniya: ${company?.companyName || "Hamkor Kompaniya"}\nLavozim: ${job.title}\nYo'nalish: ${job.category.toUpperCase()}\nMaosh: ${job.salaryRange || "Kelishilgan holda"}\nJoylashuv: ${job.locationType}\n\n${job.description.slice(0, 300)}...`,
+            data: {
+              jobId: job.id,
+              companyId: company?.id,
+              companyName: company?.companyName,
+              telegramUsername: company?.telegramUsername,
+              salaryRange: job.salaryRange,
+              category: job.category
+            }
+          }))
+        });
+      }
+    } catch (msgErr) {
+      console.error("Vacancy broadcast notification error:", msgErr);
+    }
 
     res.status(201).json({ success: true, job });
   } catch (err) {
@@ -1232,8 +1252,15 @@ r.post("/company/invitations", authenticateCompany, async (req, res, next) => {
       data: {
         userId,
         type: "company_invitation",
-        title: `? ${company?.companyName || "Hamkor Kompaniya"} sizga taklif yubordi`,
+        title: `📩 ${company?.companyName || "Hamkor Kompaniya"} sizga taklif yubordi`,
         body: message.trim(),
+        data: {
+          invitationId: invitation.id,
+          companyId,
+          companyName: company?.companyName || "Hamkor Kompaniya",
+          telegramUsername: company?.telegramUsername || "",
+          jobId: jobId || null,
+        }
       },
     });
 
@@ -1263,11 +1290,167 @@ r.post("/company/invitations", authenticateCompany, async (req, res, next) => {
   }
 });
 
+r.post("/company/invitations/:id/schedule-interview", authenticateCompany, async (req, res, next) => {
+  try {
+    const companyId = req.company.id;
+    const { id } = req.params;
+    const {
+      interviewType = "Online",
+      locationOrLink,
+      proposedTimes = [],
+      notes,
+      telegramUsername,
+    } = req.body;
+
+    const invitation = await prisma.companyInvitation.findFirst({
+      where: { id, companyId },
+      include: { user: true, company: true }
+    });
+
+    if (!invitation) {
+      return res.status(404).json({ success: false, message: "Taklif topilmadi." });
+    }
+
+    const company = invitation.company;
+    const rawTg = telegramUsername || company.telegramUsername || "";
+    const cleanTg = rawTg.replace("@", "").trim();
+
+    if (cleanTg && cleanTg !== company.telegramUsername) {
+      await prisma.company.update({
+        where: { id: companyId },
+        data: { telegramUsername: cleanTg }
+      });
+    }
+
+    const interviewDetails = {
+      type: interviewType,
+      locationOrLink: locationOrLink || (interviewType === "Online" ? "Google Meet / Zoom" : "Kompaniya ofisi"),
+      proposedTimes: Array.isArray(proposedTimes) ? proposedTimes : [proposedTimes].filter(Boolean),
+      notes: notes || "",
+      telegramUsername: cleanTg,
+      companyEmail: company.email,
+      companyName: company.companyName
+    };
+
+    const updated = await prisma.companyInvitation.update({
+      where: { id },
+      data: {
+        status: "INTERVIEW_OFFERED",
+        interviewDetails
+      }
+    });
+
+    // Send notification message to user with action payload
+    await prisma.message.create({
+      data: {
+        userId: invitation.userId,
+        type: "interview_details",
+        title: `📅 Suhbat belgilash taklifi: ${company.companyName}`,
+        body: `${company.companyName} siz bilan suhbat o'tkazish ma'lumotlarini yubordi.\nFormat: ${interviewType}\nManzil/Havola: ${interviewDetails.locationOrLink}\nTelegram: @${cleanTg || "Aloqa"}\nIltimos, taklif etilgan vaqtlardan birini tanlang yoki o'z bo'sh vaqtingizni tasdiqlang.`,
+        data: {
+          invitationId: invitation.id,
+          companyId,
+          companyName: company.companyName,
+          interviewDetails
+        }
+      }
+    });
+
+    res.json({ success: true, invitation: updated });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Developer responds to invitation: Accept or Decline
+r.post("/invitations/:id/respond", auth, async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const { id } = req.params;
+    const { action } = req.body; // "ACCEPT" | "DECLINE"
+
+    const invitation = await prisma.companyInvitation.findFirst({
+      where: { id, userId },
+      include: { company: true, user: true }
+    });
+
+    if (!invitation) {
+      return res.status(404).json({ success: false, message: "Taklif topilmadi." });
+    }
+
+    const newStatus = action === "ACCEPT" ? "ACCEPTED" : "DECLINED";
+
+    const updated = await prisma.companyInvitation.update({
+      where: { id },
+      data: { status: newStatus }
+    });
+
+    await prisma.shortlistEntry.updateMany({
+      where: { companyId: invitation.companyId, userId },
+      data: { status: action === "ACCEPT" ? "INTERVIEW" : "REJECTED" }
+    });
+
+    res.json({ success: true, status: newStatus, invitation: updated });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Developer selects / confirms interview time slot
+r.post("/invitations/:id/confirm-interview", auth, async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const { id } = req.params;
+    const { selectedTime } = req.body;
+
+    if (!selectedTime) {
+      return res.status(400).json({ success: false, message: "Suhbat vaqti tanlanishi shart." });
+    }
+
+    const invitation = await prisma.companyInvitation.findFirst({
+      where: { id, userId },
+      include: { company: true, user: true }
+    });
+
+    if (!invitation) {
+      return res.status(404).json({ success: false, message: "Taklif topilmadi." });
+    }
+
+    const updated = await prisma.companyInvitation.update({
+      where: { id },
+      data: {
+        status: "INTERVIEW_CONFIRMED",
+        userSelectedTime: String(selectedTime).trim()
+      }
+    });
+
+    // Confirmation message for user
+    await prisma.message.create({
+      data: {
+        userId,
+        type: "interview_confirmed",
+        title: `✅ Suhbat vaqti tasdiqlandi: ${invitation.company.companyName}`,
+        body: `Siz ${invitation.company.companyName} bilan suhbat vaqtini (${selectedTime}) tasdiqladingiz.\nKompaniya vakili bilan Telegram orqali bog'lanishingiz mumkin: @${invitation.company.telegramUsername || ""}`,
+        data: {
+          invitationId: invitation.id,
+          companyName: invitation.company.companyName,
+          telegramUsername: invitation.company.telegramUsername,
+          selectedTime
+        }
+      }
+    });
+
+    res.json({ success: true, status: "INTERVIEW_CONFIRMED", invitation: updated });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ----------------- COMPANY PROFILE & TEAM -----------------
 r.patch("/company/profile", authenticateCompany, async (req, res, next) => {
   try {
     const companyId = req.company.id;
-    const { companyName, legalName, phone, website, industry, companySize, city, description } = req.body;
+    const { companyName, legalName, phone, website, industry, companySize, city, description, telegramUsername } = req.body;
 
     const updated = await prisma.company.update({
       where: { id: companyId },
@@ -1280,6 +1463,7 @@ r.patch("/company/profile", authenticateCompany, async (req, res, next) => {
         ...(companySize !== undefined ? { companySize } : {}),
         ...(city !== undefined ? { city } : {}),
         ...(description !== undefined ? { description } : {}),
+        ...(telegramUsername !== undefined ? { telegramUsername: telegramUsername ? telegramUsername.replace("@", "").trim() : null } : {}),
       },
     });
 

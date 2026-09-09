@@ -93,12 +93,26 @@ r.get("/admin/users", verifyAdmin, async (req, res, next) => {
         createdAt: true,
         passwordHash: true,
         projectsCount: true,
+        attempts: {
+          select: { id: true, isSuspicious: true, suspicionReason: true, passed: true }
+        },
         _count: {
           select: { submissions: true, attempts: true }
         }
       }
     });
-    res.json({ users });
+
+    const formattedUsers = users.map((u) => {
+      const suspiciousAttempts = (u.attempts || []).filter((a) => a.isSuspicious);
+      return {
+        ...u,
+        isSuspicious: suspiciousAttempts.length > 0,
+        suspiciousCount: suspiciousAttempts.length,
+        suspicionReason: suspiciousAttempts[0]?.suspicionReason || null,
+      };
+    });
+
+    res.json({ users: formattedUsers });
   } catch (err) {
     next(err);
   }
@@ -267,24 +281,34 @@ r.delete("/admin/events/:id", verifyAdmin, async (req, res, next) => {
   }
 });
 
-// GET /api/admin/suspicions - Shubhali harakatlar va chetlatilganlar ro'yxati
+// GET /api/admin/suspicions - Shubhali harakatlar va chetlatilganlar ro'yxati (Musobaqalar + CodeLab)
 r.get("/admin/suspicions", verifyAdmin, async (req, res, next) => {
   try {
-    const disqualifiedMembers = await prisma.teamMember.findMany({
-      where: { disqualified: true },
-      include: {
-        user: { select: { id: true, name: true, email: true, phone: true, telegram: true } },
-        team: {
-          include: {
-            competition: { select: { id: true, title: true, status: true } }
+    const [disqualifiedMembers, suspiciousAttempts] = await Promise.all([
+      prisma.teamMember.findMany({
+        where: { disqualified: true },
+        include: {
+          user: { select: { id: true, name: true, email: true, phone: true, telegram: true } },
+          team: {
+            include: {
+              competition: { select: { id: true, title: true, status: true } }
+            }
           }
-        }
-      },
-      orderBy: { joinedAt: "desc" }
-    });
+        },
+        orderBy: { joinedAt: "desc" }
+      }),
+      prisma.challengeAttempt.findMany({
+        where: { isSuspicious: true },
+        include: {
+          user: { select: { id: true, name: true, email: true, phone: true, telegram: true } },
+          challenge: { select: { id: true, title: true, category: true, difficulty: true } }
+        },
+        orderBy: { updatedAt: "desc" }
+      })
+    ]);
 
-    const items = disqualifiedMembers.map(m => ({
-      id: m.id,
+    const compItems = disqualifiedMembers.map(m => ({
+      id: "member-" + m.id,
       userId: m.userId,
       userName: m.user?.name || "Noma'lum",
       userEmail: m.user?.email || "-",
@@ -297,10 +321,52 @@ r.get("/admin/suspicions", verifyAdmin, async (req, res, next) => {
       competitionStatus: m.team?.competition?.status || "-",
       reason: m.disqualifiedReason || "Shubhali harakat (tab yoki oynani almashtirish)",
       currentQuestion: m.currentQuestion,
-      date: m.joinedAt
+      date: m.joinedAt,
+      type: "COMPETITION",
+      rawMemberId: m.id
     }));
 
+    const attemptItems = suspiciousAttempts.map(a => ({
+      id: "attempt-" + a.id,
+      userId: a.userId,
+      userName: a.user?.name || "Noma'lum",
+      userEmail: a.user?.email || "-",
+      userPhone: a.user?.phone || "-",
+      telegram: a.user?.telegram || "-",
+      teamId: null,
+      teamName: "AI CodeLab",
+      competitionId: null,
+      competitionTitle: `AI CodeLab: ${a.challenge?.title || "Topshiriq"} (${(a.challenge?.category || "").toUpperCase()})`,
+      competitionStatus: "ACTIVE",
+      reason: a.suspicionReason || "Oynadan chiqib ketish / Tab almashtirish",
+      currentQuestion: 1,
+      date: a.updatedAt,
+      type: "CHALLENGE_ATTEMPT",
+      rawAttemptId: a.id
+    }));
+
+    const items = [...compItems, ...attemptItems];
     res.json({ items, count: items.length });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Clear CodeLab suspicion
+r.post("/admin/suspicions/reinstate-attempt", verifyAdmin, async (req, res, next) => {
+  try {
+    const { attemptId } = req.body;
+    if (attemptId) {
+      await prisma.challengeAttempt.update({
+        where: { id: attemptId },
+        data: {
+          isSuspicious: false,
+          suspicionReason: null,
+          tabSwitches: 0
+        }
+      });
+    }
+    res.json({ success: true, message: "CodeLab shubhasi bekor qilindi!" });
   } catch (err) {
     next(err);
   }

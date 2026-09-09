@@ -157,8 +157,14 @@ export async function initializeDatabase() {
     await client.query(`ALTER TABLE "Project" ADD COLUMN IF NOT EXISTS "liveUrl" TEXT;`);
     await client.query(`ALTER TABLE "Project" ADD COLUMN IF NOT EXISTS "stars" INTEGER NOT NULL DEFAULT 0;`);
     await client.query(`ALTER TABLE "Submission" ADD COLUMN IF NOT EXISTS "challengeId" TEXT;`);
-    await client.query(`ALTER TABLE "Submission" ADD COLUMN IF NOT EXISTS "completedAt" TIMESTAMP(3);`);
     await client.query(`ALTER TABLE "Project" ADD COLUMN IF NOT EXISTS "views" INTEGER NOT NULL DEFAULT 0;`);
+    await client.query(`ALTER TABLE "ChallengeAttempt" ADD COLUMN IF NOT EXISTS "isSuspicious" BOOLEAN NOT NULL DEFAULT false;`);
+    await client.query(`ALTER TABLE "ChallengeAttempt" ADD COLUMN IF NOT EXISTS "suspicionReason" TEXT;`);
+    await client.query(`ALTER TABLE "ChallengeAttempt" ADD COLUMN IF NOT EXISTS "tabSwitches" INTEGER NOT NULL DEFAULT 0;`);
+    await client.query(`ALTER TABLE "Company" ADD COLUMN IF NOT EXISTS "telegramUsername" TEXT;`);
+    await client.query(`ALTER TABLE "CompanyInvitation" ADD COLUMN IF NOT EXISTS "interviewDetails" JSONB;`);
+    await client.query(`ALTER TABLE "CompanyInvitation" ADD COLUMN IF NOT EXISTS "userSelectedTime" TEXT;`);
+    await client.query(`ALTER TABLE "Message" ADD COLUMN IF NOT EXISTS "data" JSONB;`);
 
     // Safe foreign key for Submission -> Challenge
     try {
