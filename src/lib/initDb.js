@@ -1,20 +1,39 @@
 import "dotenv/config";
 import pg from "pg";
 import { prisma } from "./prisma.js";
+import { dbState } from "./dbState.js";
 
 export async function initializeDatabase() {
   let dbUrl = process.env.DATABASE_URL || "postgresql://postgres:0427@localhost:5432/AslKod?schema=public";
-  if (dbUrl.includes("neon.tech") && !dbUrl.includes("connect_timeout")) {
-    dbUrl += (dbUrl.includes("?") ? "&" : "?") + "connect_timeout=30";
+  if (dbUrl.includes("neon.tech")) {
+    if (!dbUrl.includes("sslmode=")) dbUrl += (dbUrl.includes("?") ? "&" : "?") + "sslmode=require";
+    if (!dbUrl.includes("connect_timeout=")) dbUrl += (dbUrl.includes("?") ? "&" : "?") + "connect_timeout=30";
   }
-  const client = new pg.Client({
+
+  let client = new pg.Client({
     connectionString: dbUrl,
     ssl: dbUrl.includes("sslmode=require") || dbUrl.includes("neon.tech") ? { rejectUnauthorized: false } : undefined,
     connectionTimeoutMillis: 30000
   });
   
   try {
-    await client.connect();
+    try {
+      await client.connect();
+    } catch (conErr) {
+      if (dbUrl.includes("-pooler.neon.tech")) {
+        const directUrl = dbUrl.replace("-pooler.neon.tech", ".neon.tech");
+        console.log("pg.Client fallback to direct Neon host...");
+        client = new pg.Client({
+          connectionString: directUrl,
+          ssl: { rejectUnauthorized: false },
+          connectionTimeoutMillis: 30000
+        });
+        await client.connect();
+      } else {
+        throw conErr;
+      }
+    }
+    dbState.initSqlSuccess = true;
     
     // Create enums safely
     const enums = [
@@ -163,9 +182,10 @@ export async function initializeDatabase() {
     await client.query(`CREATE INDEX IF NOT EXISTS "Message_userId_read_createdAt_idx" ON "Message"("userId", "read", "createdAt");`);
 
   } catch (err) {
+    dbState.initSqlError = err.message;
     console.error("Database initialization SQL error:", err.message);
   } finally {
-    await client.end();
+    try { await client.end(); } catch {}
   }
 
   // Seed default skills and challenges if none exist

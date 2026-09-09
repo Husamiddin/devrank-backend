@@ -1,6 +1,6 @@
 import "dotenv/config";
 import { app } from "./app.js";
-import { prisma } from "./lib/prisma.js";
+import { prisma, connectPrismaWithFallback } from "./lib/prisma.js";
 import { initializeDatabase } from "./lib/initDb.js";
 import { dbState } from "./lib/dbState.js";
 
@@ -12,8 +12,21 @@ export function getDbStatus() {
 
 async function connectDbWithRetry(attempt = 1) {
   try {
+    const rawUrl = process.env.DATABASE_URL || "";
+    try {
+      const u = new URL(rawUrl.startsWith("postgresql://") || rawUrl.startsWith("postgres://") ? rawUrl : "http://localhost");
+      dbState.parsedDb = {
+        protocol: u.protocol,
+        host: u.host,
+        pathname: u.pathname,
+        search: u.search,
+        user: u.username,
+        hasPassword: Boolean(u.password)
+      };
+    } catch {}
+
     await initializeDatabase();
-    await prisma.$connect();
+    await connectPrismaWithFallback();
     await prisma.user.updateMany({ data: { online: false } });
     dbState.connected = true;
     dbState.error = null;
@@ -37,7 +50,7 @@ const server = app.listen(port, () => {
 
 const shutdown = async () => {
   server.close(async () => {
-    if (dbConnected) {
+    if (dbState.connected) {
       try {
         await prisma.$disconnect();
       } catch {}
