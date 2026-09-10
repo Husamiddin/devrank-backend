@@ -303,7 +303,7 @@ r.get("/admin/suspicions", verifyAdmin, async (req, res, next) => {
           user: { select: { id: true, name: true, email: true, phone: true, telegram: true } },
           challenge: { select: { id: true, title: true, category: true, difficulty: true } }
         },
-        orderBy: { updatedAt: "desc" }
+        orderBy: { createdAt: "desc" }
       })
     ]);
 
