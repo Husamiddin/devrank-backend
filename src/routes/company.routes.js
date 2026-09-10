@@ -536,7 +536,7 @@ r.get("/company/talent/:id", authenticateCompany, async (req, res, next) => {
         attempts: {
           include: {
             challenge: {
-              select: { id: true, title: true, category: true, points: true, difficulty: true },
+              select: { id: true, title: true, category: true, points: true, difficulty: true, type: true },
             },
           },
           orderBy: { createdAt: "desc" },
@@ -690,17 +690,25 @@ r.get("/company/talent/:id", authenticateCompany, async (req, res, next) => {
           liveUrl: p.liveUrl,
           stars: p.stars,
         })),
-        challenges: user.attempts.map((a) => ({
-          id: a.id,
-          title: a.challenge?.title || "Topshiriq",
-          category: a.challenge?.category || "web",
-          difficulty: a.challenge?.difficulty || "medium",
-          passed: a.passed,
-          score: a.score,
-          isSuspicious: Boolean(a.isSuspicious),
-          suspicionReason: a.suspicionReason || null,
-          createdAt: a.createdAt,
-        })),
+        challenges: user.attempts.map((a) => {
+          const isTimeout = Boolean(!a.passed && (a.feedback?.toLowerCase().includes("vaqt tugadi") || a.status === "TIMEOUT"));
+          return {
+            id: a.id,
+            challengeId: a.challenge?.id,
+            title: a.challenge?.title || "Topshiriq",
+            category: a.challenge?.category || "web",
+            difficulty: a.challenge?.difficulty || "medium",
+            type: a.challenge?.type || "CODE",
+            passed: a.passed,
+            score: a.score,
+            status: a.status,
+            feedback: a.feedback,
+            isSuspicious: Boolean(a.isSuspicious),
+            suspicionReason: a.suspicionReason || null,
+            isTimeout,
+            createdAt: a.createdAt,
+          };
+        }),
         competitions: (user.teamMemberships || []).map((m) => ({
           id: m.id,
           competitionId: m.team?.competition?.id,

@@ -35,7 +35,7 @@ r.get("/challenges", auth, async (req, res, next) => {
         userId: req.user.id,
         challengeId: { in: items.map((x) => x.id) }
       },
-      select: { challengeId: true, passed: true, score: true, status: true, attempts: true, isSuspicious: true, suspicionReason: true }
+      select: { challengeId: true, passed: true, score: true, status: true, attempts: true, isSuspicious: true, suspicionReason: true, feedback: true }
     });
 
     const map = new Map(attempts.map((x) => [x.challengeId, x]));
@@ -68,15 +68,20 @@ r.get("/challenges", auth, async (req, res, next) => {
         const isCompleted = Boolean(attemptData?.passed || attemptData?.status === "COMPLETED");
         const isLockedByAttempts = attemptData?.status === "LOCKED";
         const isLevelLocked = !unlockedLevels.has(x.difficulty?.toUpperCase() || "EASY");
+        const hasFailed = Boolean(attemptData && !attemptData.passed && (attemptData.attempts > 0 || attemptData.status === "FAILED"));
+        const isTimeout = Boolean(attemptData?.feedback?.toLowerCase().includes("vaqt tugadi") || attemptData?.status === "TIMEOUT");
 
         return {
           ...x,
           completed: isCompleted,
+          failed: hasFailed,
+          isTimeout,
           status: attemptData?.status || "ACTIVE",
           attempts: attemptData?.attempts || 0,
           bestScore: attemptData?.score || 0,
           isSuspicious: Boolean(attemptData?.isSuspicious),
           suspicionReason: attemptData?.suspicionReason || null,
+          feedback: attemptData?.feedback || null,
           hasQuiz: Boolean(quiz),
           locked: isLevelLocked || isLockedByAttempts
         };
@@ -126,6 +131,85 @@ r.post("/challenges/:id/flag-suspicious", auth, async (req, res, next) => {
     });
 
     res.json({ ok: true, isSuspicious: true, suspicionReason: reason, attempt });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Topshiriq vaqti tugaganda chaqiriladigan endpoint
+r.post("/challenges/:id/timeout", auth, async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const challenge = await prisma.challenge.findUnique({ where: { id } });
+    if (!challenge) {
+      return res.status(404).json({ message: "Challenge topilmadi." });
+    }
+
+    const prevAttempt = await prisma.challengeAttempt.findUnique({
+      where: {
+        userId_challengeId: { userId: req.user.id, challengeId: id }
+      }
+    });
+
+    const isAlreadyPassed = Boolean(prevAttempt?.passed);
+    const feedback = "Belgilangan vaqt tugadi! Topshiriq xato deb belgilandi.";
+
+    // Failed submission yaratish
+    await prisma.submission.create({
+      data: {
+        userId: req.user.id,
+        challengeId: challenge.id,
+        language: challenge.language || "javascript",
+        code: String(req.body.code || "// Vaqt tugadi"),
+        status: "FAILED",
+        score: 0,
+        output: "> Vaqt tugadi! Belgilangan vaqt ichida topshiriq bajarilmadi.",
+        completedAt: new Date(),
+        evaluation: {
+          create: {
+            overall: 0,
+            quality: 0,
+            security: 0,
+            speed: 0,
+            correctness: 0,
+            feedback,
+            model: "Timeout Guard"
+          }
+        }
+      }
+    });
+
+    const attempt = await prisma.challengeAttempt.upsert({
+      where: {
+        userId_challengeId: { userId: req.user.id, challengeId: id }
+      },
+      update: {
+        passed: isAlreadyPassed,
+        score: prevAttempt?.score || 0,
+        attempts: { increment: 1 },
+        status: isAlreadyPassed ? "COMPLETED" : "FAILED",
+        feedback: isAlreadyPassed ? prevAttempt.feedback : feedback
+      },
+      create: {
+        userId: req.user.id,
+        challengeId: id,
+        passed: false,
+        score: 0,
+        attempts: 1,
+        status: "FAILED",
+        feedback,
+        isSuspicious: false
+      }
+    });
+
+    res.json({
+      success: true,
+      passed: false,
+      score: 0,
+      status: "FAILED",
+      message: feedback,
+      attempt
+    });
   } catch (err) {
     next(err);
   }
