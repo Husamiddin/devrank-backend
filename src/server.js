@@ -12,10 +12,7 @@ export function getDbStatus() {
 
 async function connectDbWithRetry(attempt = 1) {
   try {
-    if (!process.env.DATABASE_URL || process.env.DATABASE_URL.includes("ep-bitter-rain")) {
-      process.env.DATABASE_URL = "postgresql://postgres:gvYamfwuVlnJYsGKptYDtPoNprFAdVDb@postgres.railway.internal:5432/railway";
-    }
-    const rawUrl = process.env.DATABASE_URL || "";
+    const rawUrl = process.env.DATABASE_URL ||  process.env.NEON_DATABASE_URL || "";
     try {
       const u = new URL(rawUrl.startsWith("postgresql://") || rawUrl.startsWith("postgres://") ? rawUrl : "http://localhost");
       dbState.parsedDb = {
