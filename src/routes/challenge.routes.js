@@ -66,20 +66,29 @@ r.get("/challenges", auth, async (req, res, next) => {
       items: items.map(({ tests, quiz, ...x }) => {
         const attemptData = map.get(x.id);
         const isCompleted = Boolean(attemptData?.passed || attemptData?.status === "COMPLETED");
-        const isLockedByAttempts = attemptData?.status === "LOCKED";
-        const isLevelLocked = !unlockedLevels.has(x.difficulty?.toUpperCase() || "EASY");
-        const hasFailed = Boolean(attemptData && !attemptData.passed && (attemptData.attempts > 0 || attemptData.status === "FAILED"));
+        const isSuspicious = Boolean(attemptData?.isSuspicious);
         const isTimeout = Boolean(attemptData?.feedback?.toLowerCase().includes("vaqt tugadi") || attemptData?.status === "TIMEOUT");
+        const hasFailed = Boolean(
+          attemptData &&
+          !attemptData.passed &&
+          (attemptData.status === "FAILED" ||
+           attemptData.status === "LOCKED" ||
+           isTimeout ||
+           (x.type === "QUIZ" && attemptData.attempts >= 1) ||
+           attemptData.attempts >= 2)
+        );
+        const isLockedByAttempts = isSuspicious || hasFailed;
+        const isLevelLocked = !unlockedLevels.has(x.difficulty?.toUpperCase() || "EASY");
 
         return {
           ...x,
           completed: isCompleted,
           failed: hasFailed,
           isTimeout,
-          status: attemptData?.status || "ACTIVE",
+          status: hasFailed ? "FAILED" : isCompleted ? "COMPLETED" : (attemptData?.status || "ACTIVE"),
           attempts: attemptData?.attempts || 0,
           bestScore: attemptData?.score || 0,
-          isSuspicious: Boolean(attemptData?.isSuspicious),
+          isSuspicious,
           suspicionReason: attemptData?.suspicionReason || null,
           feedback: attemptData?.feedback || null,
           hasQuiz: Boolean(quiz),
@@ -234,9 +243,26 @@ r.get("/challenges/:id", auth, async (req, res, next) => {
       }
     });
 
+    const isSuspicious = Boolean(attempt?.isSuspicious);
+    const isCompleted = Boolean(attempt?.passed || attempt?.status === "COMPLETED");
+    const isTimeout = Boolean(attempt?.feedback?.toLowerCase().includes("vaqt tugadi") || attempt?.status === "TIMEOUT");
+    const isFailed = Boolean(
+      attempt &&
+      !attempt.passed &&
+      (attempt.status === "FAILED" ||
+       attempt.status === "LOCKED" ||
+       isTimeout ||
+       (challenge.type === "QUIZ" && attempt.attempts >= 1) ||
+       attempt.attempts >= 2)
+    );
+
     res.json({ 
       challenge, 
-      attempt: attempt || { status: "ACTIVE", attempts: 0, passed: false } 
+      attempt: attempt || { status: "ACTIVE", attempts: 0, passed: false },
+      isSuspicious,
+      isCompleted,
+      isFailed,
+      locked: isSuspicious || isFailed
     });
   } catch (e) {
     next(e);
@@ -259,6 +285,15 @@ r.post("/challenges/:id/submit", auth, submitLimiter, async (req, res, next) => 
       }
     });
 
+    if (prevAttempt && prevAttempt.isSuspicious) {
+      return res.status(403).json({ 
+        success: false, 
+        locked: true,
+        isSuspicious: true,
+        message: "Ushbu topshiriqda shubha bor deb topilgan va qayta ishlash qat'iyan man etiladi!" 
+      });
+    }
+
     if (prevAttempt && prevAttempt.status === "COMPLETED") {
       return res.status(403).json({ 
         success: false, 
@@ -267,11 +302,22 @@ r.post("/challenges/:id/submit", auth, submitLimiter, async (req, res, next) => 
       });
     }
 
-    if (prevAttempt && prevAttempt.status === "LOCKED") {
+    const prevTimeout = Boolean(prevAttempt?.feedback?.toLowerCase().includes("vaqt tugadi") || prevAttempt?.status === "TIMEOUT");
+    const prevFailed = Boolean(
+      prevAttempt &&
+      !prevAttempt.passed &&
+      (prevAttempt.status === "FAILED" ||
+       prevAttempt.status === "LOCKED" ||
+       prevTimeout ||
+       (challenge.type === "QUIZ" && prevAttempt.attempts >= 1) ||
+       prevAttempt.attempts >= 2)
+    );
+
+    if (prevFailed) {
       return res.status(403).json({ 
         success: false, 
         locked: true,
-        message: "Imkoniyatlaringiz tugagani uchun bu vazifa bloklangan." 
+        message: "Ushbu topshiriq uchun imkoniyatlar tugagan va qayta ishlash bloklangan!" 
       });
     }
 
@@ -297,8 +343,8 @@ r.post("/challenges/:id/submit", auth, submitLimiter, async (req, res, next) => 
       };
 
       if (!isCorrect) {
-        attemptsCount += 1;
-        updatedStatus = attemptsCount >= 2 ? "LOCKED" : "ACTIVE";
+        attemptsCount = 1;
+        updatedStatus = "FAILED"; // Quiz 1 marta xato bo'lsa darhol FAILED va qulflanadi
       } else {
         updatedStatus = "COMPLETED";
       }
@@ -324,7 +370,7 @@ r.post("/challenges/:id/submit", auth, submitLimiter, async (req, res, next) => 
         quality: 85, security: 90, speed: 90,
         feedback: runnerResult.passed
           ? "Ajoyib! To'g'ri javob berdingiz."
-          : `Javob noto'g'ri. Qolgan urinishlar: ${Math.max(0, 2 - attemptsCount)}`,
+          : "Javob noto'g'ri. Test savoliga faqat 1 marta urinish mumkin.",
         model: "Quiz Validator",
         results: runnerResult.results
       };
@@ -346,7 +392,8 @@ r.post("/challenges/:id/submit", auth, submitLimiter, async (req, res, next) => 
               feedback: "Xato, o'tmadingiz! Kodingizda sun'iy intellekt yordami aniqlandi.",
               model: "AI Anti-Cheat Detektiv"
             };
-            updatedStatus = "ACTIVE";
+            attemptsCount += 1;
+            updatedStatus = attemptsCount >= 2 ? "FAILED" : "ACTIVE";
           }
         } catch (err) {
           console.error("Anti-Cheat Error:", err);
@@ -357,6 +404,9 @@ r.post("/challenges/:id/submit", auth, submitLimiter, async (req, res, next) => 
         aiReview = await evaluateWithGemini({ code, language, challenge, runnerResult });
         if (runnerResult.passed && aiReview.overall >= 60) {
           updatedStatus = "COMPLETED";
+        } else {
+          attemptsCount += 1;
+          updatedStatus = attemptsCount >= 2 ? "FAILED" : "ACTIVE";
         }
       }
     }

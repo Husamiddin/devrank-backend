@@ -44,7 +44,7 @@ async function connectDbWithRetry(attempt = 1) {
 
 // Start HTTP server immediately so Railway / hosting healthchecks never fail or crash
 const server = app.listen(port, () => {
-  console.log(`MaqsadCode API running on http://localhost:${port}`);
+  console.log(`AslKod API running on http://localhost:${port}`);
   connectDbWithRetry();
 });
 

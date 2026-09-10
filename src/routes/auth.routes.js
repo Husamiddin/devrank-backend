@@ -7,20 +7,40 @@ import { recalculateAllTimeRanks } from "../services/ranking.service.js";
 
 const r = Router();
 
+const DISPOSABLE_DOMAINS = ["mailinator.com", "tempmail.com", "10minutemail.com", "throwawaymail.com", "fake.com", "test.com", "example.com", "trashmail.com"];
+
 const registerSchema = z.object({
-  name: z.string().min(2).max(80),
-  email: z.string().email(),
-  phone: z.string().min(7).max(35),
-  password: z.string().min(6).max(200)
+  name: z.string().min(2, "Ism kamida 2 ta belgidan iborat bo'lishi kerak").max(80),
+  email: z.string().email("Haqiqiy email manzilini kiriting").refine((val) => {
+    const domain = val.split("@")[1]?.toLowerCase();
+    if (!domain || !domain.includes(".")) return false;
+    const tld = domain.split(".").pop();
+    if (!tld || tld.length < 2) return false;
+    return !DISPOSABLE_DOMAINS.includes(domain);
+  }, { message: "Mavjud bo'lgan haqiqiy email manzilini kiriting (soxta yoki vaqtinchalik pochtalar qabul qilinmaydi)" }),
+  phone: z.string().min(7, "Telefon raqami noto'g'ri").max(35),
+  password: z.string().min(6, "Parol kamida 6 ta belgidan iborat bo'lishi kerak").max(200)
 });
 
 r.post("/register", async (req, res, next) => {
   try {
     const body = registerSchema.parse(req.body);
-    const exists = await prisma.user.findUnique({
-      where: { email: body.email.toLowerCase() }
+    const email = body.email.toLowerCase().trim();
+
+    const exists = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { email },
+          { phone: body.phone.trim() }
+        ]
+      }
     });
-    if (exists) return res.status(409).json({ message: "Bu email bilan hisob mavjud." });
+
+    if (exists) {
+      return res.status(409).json({ 
+        message: "Ushbu email yoki telefon bilan akkaunt allaqachon mavjud! Bitta akkauntdan faqat 1 ta foydalanuvchi ro'yxatdan o'tishi mumkin." 
+      });
+    }
 
     const passwordHash = await hashPassword(body.password);
     const user = await prisma.user.create({

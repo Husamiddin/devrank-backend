@@ -703,8 +703,8 @@ r.get("/company/talent/:id", authenticateCompany, async (req, res, next) => {
             score: a.score,
             status: a.status,
             feedback: a.feedback,
-            isSuspicious: Boolean(a.isSuspicious),
-            suspicionReason: a.suspicionReason || null,
+            isSuspicious: Boolean(a.isSuspicious || a.suspicionReason || (a.tabSwitches && a.tabSwitches > 0)),
+            suspicionReason: a.suspicionReason || (a.isSuspicious ? "Anti-Cheat nazorati shubhasi" : (a.tabSwitches > 0 ? "Oynadan chiqib ketish aniqlangan" : null)),
             isTimeout,
             createdAt: a.createdAt,
           };
