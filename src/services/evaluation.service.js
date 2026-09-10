@@ -51,7 +51,7 @@ export async function evaluateWithGemini({ code, language, challenge, runnerResu
   }
 
   const prompt = `
-Siz AslKod UZ professional AI Senior Code Reviewer tizimisiz.
+Siz MaqsadCode professional AI Senior Code Reviewer tizimisiz.
 Foydalanuvchi quyidagi dasturlash topshirig'ini bajardi va test runner natijalari keltirilgan.
 
 Topshiriq:

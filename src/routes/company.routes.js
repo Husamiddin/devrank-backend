@@ -40,8 +40,8 @@ export async function authenticateCompany(req, res, next) {
       const hash = await bcrypt.hash("company2026", 10);
       comp = await prisma.company.create({
         data: {
-          companyName: "AslKod Enterprise Partner",
-          email: "partner@AslKod.uz",
+          companyName: "MaqsadCode Enterprise Partner",
+          email: "partner@maqsadcode.uz",
           passwordHash: hash,
           industry: "IT / FinTech",
           city: "Toshkent",
@@ -160,8 +160,8 @@ r.post("/company/auth/login", async (req, res, next) => {
         const hash = await bcrypt.hash("company2026", 10);
         company = await prisma.company.create({
           data: {
-            companyName: companyName || "AslKod Enterprise Partner",
-            email: email || "partner@AslKod.uz",
+            companyName: companyName || "MaqsadCode Enterprise Partner",
+            email: email || "partner@maqsadcode.uz",
             passwordHash: hash,
             status: "VERIFIED",
           },
