@@ -143,10 +143,13 @@ export async function getDeterministicTopTalents() {
     ux: null,
   };
 
-  // Fetch all category score records where points > 0
+  // Fetch all category score records where points > 0, excluding founder from candidate rankings
   const allCategoryScores = await prisma.userCategoryScore.findMany({
     where: {
       points: { gt: 0 },
+      user: {
+        email: { not: "aminovhusamiddin@gmail.com" }
+      }
     },
     include: {
       user: {

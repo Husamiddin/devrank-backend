@@ -1386,6 +1386,10 @@ r.post("/invitations/:id/respond", auth, async (req, res, next) => {
       return res.status(404).json({ success: false, message: "Taklif topilmadi." });
     }
 
+    if (invitation.status === "ACCEPTED" || invitation.status === "DECLINED" || invitation.status === "INTERVIEW_CONFIRMED") {
+      return res.status(400).json({ success: false, message: "Siz ushbu taklifga allaqachon javob bergansiz!" });
+    }
+
     const newStatus = action === "ACCEPT" ? "ACCEPTED" : "DECLINED";
 
     const updated = await prisma.companyInvitation.update({

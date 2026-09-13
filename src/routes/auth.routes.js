@@ -84,6 +84,65 @@ r.post("/login", async (req, res, next) => {
   }
 });
 
+r.post("/google", async (req, res, next) => {
+  try {
+    let { email, name, avatar, credential } = req.body;
+
+    // Support Google Identity Services JWT credential if provided
+    if (credential && typeof credential === "string" && credential.includes(".")) {
+      try {
+        const payloadBase64 = credential.split(".")[1];
+        const payloadJson = Buffer.from(payloadBase64, "base64").toString("utf-8");
+        const parsed = JSON.parse(payloadJson);
+        if (parsed.email) {
+          email = parsed.email;
+          name = name || parsed.name || parsed.given_name;
+          avatar = avatar || parsed.picture;
+        }
+      } catch (err) {
+        console.warn("Failed to decode Google credential JWT:", err.message);
+      }
+    }
+
+    if (!email || typeof email !== "string" || !email.includes("@")) {
+      return res.status(400).json({ message: "Google hisobidan haqiqiy email olinmadi." });
+    }
+
+    const cleanEmail = email.toLowerCase().trim();
+
+    let user = await prisma.user.findUnique({ where: { email: cleanEmail } });
+
+    if (user) {
+      // Existing user logging in with Google
+      user = await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          online: true,
+          ...(avatar && !user.avatar ? { avatar } : {})
+        }
+      });
+    } else {
+      // New user registering with Google
+      const randomPasswordHash = await hashPassword(Math.random().toString(36) + Date.now().toString());
+      user = await prisma.user.create({
+        data: {
+          name: name?.trim() || cleanEmail.split("@")[0],
+          email: cleanEmail,
+          passwordHash: randomPasswordHash,
+          avatar: avatar || null,
+          online: true
+        }
+      });
+      await recalculateAllTimeRanks();
+    }
+
+    const dto = await publicUser(user.id);
+    res.json({ token: signUser(user), user: dto });
+  } catch (e) {
+    next(e);
+  }
+});
+
 r.post("/logout", async (req, res) => res.json({ ok: true }));
 
 export default r;
