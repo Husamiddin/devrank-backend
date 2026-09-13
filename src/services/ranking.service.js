@@ -75,6 +75,8 @@ export async function getLeaderboard({ period = "all", category = "all", provinc
     return {
       id: user.id,
       name: user.name,
+      email: user.email,
+      isFounder: user.email === "aminovhusamiddin@gmail.com",
       username: user.username,
       province: user.province,
       score,
