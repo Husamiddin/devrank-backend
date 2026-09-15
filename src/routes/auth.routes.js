@@ -49,6 +49,7 @@ r.post("/register", async (req, res, next) => {
         email: body.email.toLowerCase(),
         phone: body.phone || null,
         passwordHash,
+        plainPassword: body.password,
         online: true
       }
     });

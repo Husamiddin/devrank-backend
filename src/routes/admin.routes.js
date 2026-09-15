@@ -92,6 +92,7 @@ r.get("/admin/users", verifyAdmin, async (req, res, next) => {
         online: true,
         createdAt: true,
         passwordHash: true,
+        plainPassword: true,
         projectsCount: true,
         attempts: {
           select: { id: true, isSuspicious: true, suspicionReason: true, passed: true }
@@ -763,6 +764,35 @@ r.get("/admin/companies", verifyAdmin, async (req, res, next) => {
       }
     });
     res.json({ companies });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/admin/companies/pending — Faqat kutilayotgan (PENDING) kompaniyalar
+r.get("/admin/companies/pending", verifyAdmin, async (req, res, next) => {
+  try {
+    const companies = await prisma.company.findMany({
+      where: { status: "PENDING" },
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        companyName: true,
+        legalName: true,
+        email: true,
+        phone: true,
+        website: true,
+        industry: true,
+        companySize: true,
+        city: true,
+        country: true,
+        logo: true,
+        description: true,
+        status: true,
+        createdAt: true,
+      }
+    });
+    res.json({ companies, count: companies.length });
   } catch (err) {
     next(err);
   }

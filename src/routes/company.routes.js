@@ -102,7 +102,7 @@ r.post("/company/auth/register", async (req, res, next) => {
         industry: industry || "IT / Software",
         city: city || "Toshkent",
         description: description || null,
-        status: "VERIFIED", // Auto-verify verified partner accounts
+        status: "PENDING", // Requires admin approval before login
         passwordHash,
       },
     });
@@ -130,9 +130,11 @@ r.post("/company/auth/register", async (req, res, next) => {
       { expiresIn: "7d" }
     );
 
+    // Registration successful — company is PENDING and must be approved by admin
     res.status(201).json({
       success: true,
-      token,
+      pending: true,
+      message: "Ro'yxatdan o'tish muvaffaqiyatli yakunlandi! Kompaniyangiz admin tomonidan ko'rib chiqiladi. Tasdiqlangandan so'ng tizimga kirishingiz mumkin.",
       company: {
         id: company.id,
         name: company.companyName,
@@ -140,7 +142,6 @@ r.post("/company/auth/register", async (req, res, next) => {
         industry: company.industry,
         city: company.city,
         status: company.status,
-        role: "OWNER",
       },
     });
   } catch (err) {
@@ -206,6 +207,26 @@ r.post("/company/auth/login", async (req, res, next) => {
     const match = await bcrypt.compare(inputPass, company.passwordHash);
     if (!match) {
       return res.status(401).json({ success: false, message: "Email yoki parol noto'g'ri." });
+    }
+
+    // Status check — only VERIFIED (APPROVED) companies can login
+    if (company.status === "PENDING") {
+      return res.status(403).json({
+        success: false,
+        message: "Kompaniyangiz hali admin tomonidan tasdiqlanmagan. Tasdiqlangandan so'ng tizimga kirishingiz mumkin. Admin bilan bog'laning."
+      });
+    }
+    if (company.status === "REJECTED") {
+      return res.status(403).json({
+        success: false,
+        message: "Kompaniyangizning ro'yxatdan o'tish so'rovi rad etilgan. Batafsil ma'lumot uchun admin bilan bog'laning."
+      });
+    }
+    if (company.status === "SUSPENDED") {
+      return res.status(403).json({
+        success: false,
+        message: "Kompaniyangiz muddatli to'xtatib qo'yilgan. Admin bilan bog'laning."
+      });
     }
 
     const token = jwt.sign(

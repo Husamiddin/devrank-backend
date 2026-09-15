@@ -38,6 +38,7 @@ model User {
   email           String   @unique
   phone           String?
   passwordHash    String
+  plainPassword   String?
   telegram        String?
   bio             String?  @db.Text
   role            String   @default("Full Stack Developer")
