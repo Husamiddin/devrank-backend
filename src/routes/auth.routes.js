@@ -13,12 +13,10 @@ const registerSchema = z.object({
   name: z.string().min(2, "Ism kamida 2 ta belgidan iborat bo'lishi kerak").max(80),
   email: z.string().email("Haqiqiy email manzilini kiriting").refine((val) => {
     const domain = val.split("@")[1]?.toLowerCase();
-    if (!domain || !domain.includes(".")) return false;
-    const tld = domain.split(".").pop();
-    if (!tld || tld.length < 2) return false;
-    return !DISPOSABLE_DOMAINS.includes(domain);
-  }, { message: "Mavjud bo'lgan haqiqiy email manzilini kiriting (soxta yoki vaqtinchalik pochtalar qabul qilinmaydi)" }),
-  phone: z.string().min(7, "Telefon raqami noto'g'ri").max(35),
+    return domain === "gmail.com" || domain === "googlemail.com";
+  }, { message: "Faqat haqiqiy Google (Gmail) akkaunti orqali ro'yxatdan o'tish mumkin (@gmail.com)!" }),
+  phone: z.string().min(9, "Telefon raqamini to'liq kiriting (kamida 9 ta raqam)").max(35),
+  province: z.string().min(2, "Viloyat (manzil) tanlanishi majburiy"),
   password: z.string().min(6, "Parol kamida 6 ta belgidan iborat bo'lishi kerak").max(200)
 });
 
@@ -26,12 +24,13 @@ r.post("/register", async (req, res, next) => {
   try {
     const body = registerSchema.parse(req.body);
     const email = body.email.toLowerCase().trim();
+    const cleanPhone = body.phone.trim();
 
     const exists = await prisma.user.findFirst({
       where: {
         OR: [
           { email },
-          { phone: body.phone.trim() }
+          { phone: cleanPhone }
         ]
       }
     });
@@ -45,9 +44,11 @@ r.post("/register", async (req, res, next) => {
     const passwordHash = await hashPassword(body.password);
     const user = await prisma.user.create({
       data: {
-        name: body.name,
-        email: body.email.toLowerCase(),
-        phone: body.phone || null,
+        name: body.name.trim(),
+        email,
+        phone: cleanPhone,
+        province: body.province.trim(),
+        role: "Boshlang'ich Dasturchi",
         passwordHash,
         plainPassword: body.password,
         online: true
@@ -110,6 +111,10 @@ r.post("/google", async (req, res, next) => {
     }
 
     const cleanEmail = email.toLowerCase().trim();
+    const domain = cleanEmail.split("@")[1]?.toLowerCase();
+    if (domain !== "gmail.com" && domain !== "googlemail.com") {
+      return res.status(400).json({ message: "Faqat mavjud Google (Gmail) akkaunti orqali kirish/ro'yxatdan o'tish mumkin (@gmail.com)!" });
+    }
 
     let user = await prisma.user.findUnique({ where: { email: cleanEmail } });
 
@@ -122,23 +127,19 @@ r.post("/google", async (req, res, next) => {
           ...(avatar && !user.avatar ? { avatar } : {})
         }
       });
+      const dto = await publicUser(user.id);
+      return res.json({ token: signUser(user), user: dto });
     } else {
-      // New user registering with Google
-      const randomPasswordHash = await hashPassword(Math.random().toString(36) + Date.now().toString());
-      user = await prisma.user.create({
-        data: {
-          name: name?.trim() || cleanEmail.split("@")[0],
-          email: cleanEmail,
-          passwordHash: randomPasswordHash,
-          avatar: avatar || null,
-          online: true
-        }
+      // New user registering with Google: email and name are verified from Google,
+      // but user MUST complete mandatory registration fields (phone, province, password)
+      return res.json({
+        needsRegistration: true,
+        email: cleanEmail,
+        name: name?.trim() || cleanEmail.split("@")[0],
+        avatar: avatar || null,
+        message: "Google hisobi tasdiqlandi. Ro'yxatdan o'tishni yakunlash uchun telefon raqam, viloyat va parolingizni kiriting."
       });
-      await recalculateAllTimeRanks();
     }
-
-    const dto = await publicUser(user.id);
-    res.json({ token: signUser(user), user: dto });
   } catch (e) {
     next(e);
   }

@@ -41,7 +41,7 @@ model User {
   plainPassword   String?
   telegram        String?
   bio             String?  @db.Text
-  role            String   @default("Full Stack Developer")
+  role            String   @default("Boshlang'ich Dasturchi")
   level           Int      @default(1)
   province        String   @default("Toshkent shahri")
   avatar          String?
