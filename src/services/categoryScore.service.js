@@ -187,7 +187,14 @@ export async function getDeterministicTopTalents() {
       return b.passedChallenges - a.passedChallenges;
     });
 
-    const topScoreRecord = catCandidates[0];
+    let topScoreRecord = catCandidates[0];
+
+    // If all candidates in this category were used elsewhere, pick highest scorer in this category
+    if (!topScoreRecord) {
+      const anyInCat = allCategoryScores.filter((cs) => cs.category === cat && cs.user);
+      anyInCat.sort((a, b) => b.points - a.points || b.passedChallenges - a.passedChallenges);
+      topScoreRecord = anyInCat[0];
+    }
 
     if (topScoreRecord && topScoreRecord.points > 0 && topScoreRecord.user) {
       usedUserIds.add(topScoreRecord.userId);
@@ -210,7 +217,7 @@ export async function getDeterministicTopTalents() {
         completedChallenges: topScoreRecord.completedChallenges,
         accuracy,
         online: u.online,
-        avatar: u.avatar,
+        avatar: (u.avatar && u.avatar.length > 50000) ? null : u.avatar,
         skills: u.skills.map((s) => s.skill?.name).filter(Boolean),
         projectsCount: u.projects.length,
       };
@@ -219,6 +226,7 @@ export async function getDeterministicTopTalents() {
       const fallbackUser = await prisma.user.findFirst({
         where: {
           primaryCategory: cat,
+          email: { not: "aminovhusamiddin@gmail.com" },
           NOT: { id: { in: Array.from(usedUserIds) } }
         },
         orderBy: [{ score: "desc" }, { createdAt: "desc" }],
@@ -249,7 +257,7 @@ export async function getDeterministicTopTalents() {
           completedChallenges: 0,
           accuracy,
           online: Boolean(fallbackUser.online),
-          avatar: fallbackUser.avatar,
+          avatar: (fallbackUser.avatar && fallbackUser.avatar.length > 50000) ? null : fallbackUser.avatar,
           skills: fallbackUser.skills?.map((s) => s.skill?.name).filter(Boolean) || [],
           projectsCount: fallbackUser.projects?.length || 0,
         };

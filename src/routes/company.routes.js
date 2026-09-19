@@ -358,7 +358,9 @@ r.get("/company/talent", authenticateCompany, async (req, res, next) => {
       limit = 20,
     } = req.query;
 
-    const where = {};
+    const where = {
+      email: { not: "aminovhusamiddin@gmail.com" },
+    };
 
     if (search) {
       const q = String(search).trim();
@@ -495,7 +497,7 @@ r.get("/company/talent", authenticateCompany, async (req, res, next) => {
           score: u.score,
           rank: u.rank,
           online: u.online,
-          avatar: u.avatar,
+          avatar: (u.avatar && u.avatar.length > 50000) ? null : u.avatar,
           phone: formatPhone(u.phone),
           telegram: u.telegram,
           primaryCategory: u.primaryCategory,

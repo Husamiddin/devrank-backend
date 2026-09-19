@@ -411,12 +411,44 @@ r.post("/competitions/:id/questions/:questionId/answer", auth, async (req, res, 
       const matchRatio = keywords.length > 0 ? matched.length / keywords.length : 1;
       isCorrect = hasLength && isEnglish && (matched.length >= 2 || matchRatio >= 0.2);
     } else if (question.type === "CODE") {
-      // CODE evaluation: Extreme tasks (including Q50 500 BALL ML task)
-      if (question.orderIndex === 50) {
-        if (cleanUserAnswer === "4.32" || cleanUserAnswer.includes("4.32")) {
-          isCorrect = true;
-        } else {
-          try {
+      // CODE evaluation: Extreme tasks (Web tasks: Q46-Q50, AI tasks, etc.)
+      try {
+        if (cleanUserAnswer.includes("isvalidparentheses") || question.question.includes("isValidParentheses")) {
+          const userFn = new Function(`${answer}; return typeof isValidParentheses === 'function' ? isValidParentheses : null;`)();
+          if (userFn && userFn("()") === true && userFn("([)]") === false && userFn("{[]}") === true) {
+            isCorrect = true;
+          }
+        } else if (cleanUserAnswer.includes("flattenarray") || question.question.includes("flattenArray")) {
+          const userFn = new Function(`${answer}; return typeof flattenArray === 'function' ? flattenArray : null;`)();
+          if (userFn && JSON.stringify(userFn([1, [2, [3, [4]], 5]])) === "[1,2,3,4,5]") {
+            isCorrect = true;
+          }
+        } else if (cleanUserAnswer.includes("deepclone") || question.question.includes("deepClone")) {
+          const userFn = new Function(`${answer}; return typeof deepClone === 'function' ? deepClone : null;`)();
+          if (userFn) {
+            const orig = { a: 1, b: { c: 2 } };
+            const cloned = userFn(orig);
+            if (cloned && cloned !== orig && cloned.b && cloned.b.c === 2) {
+              isCorrect = true;
+            }
+          }
+        } else if (cleanUserAnswer.includes("wordfrequency") || question.question.includes("wordFrequency")) {
+          const userFn = new Function(`${answer}; return typeof wordFrequency === 'function' ? wordFrequency : null;`)();
+          if (userFn) {
+            const wf = userFn("salom dunyo salom");
+            if (wf && (wf.salom === 2 || wf["salom"] === 2)) {
+              isCorrect = true;
+            }
+          }
+        } else if (cleanUserAnswer.includes("mergesorted") || question.question.includes("mergeSorted")) {
+          const userFn = new Function(`${answer}; return typeof mergeSorted === 'function' ? mergeSorted : null;`)();
+          if (userFn && JSON.stringify(userFn([1, 3, 5], [2, 4, 6])) === "[1,2,3,4,5,6]") {
+            isCorrect = true;
+          }
+        } else if (cleanUserAnswer.includes("scaleddotproductattention") || question.question.includes("scaledDotProductAttention")) {
+          if (cleanUserAnswer === "4.32" || cleanUserAnswer.includes("4.32")) {
+            isCorrect = true;
+          } else {
             const userFn = new Function(`${answer}; return typeof scaledDotProductAttention === 'function' ? scaledDotProductAttention : null;`)();
             if (userFn) {
               const res1 = userFn([[1, 0], [0, 1]], [[1, 0], [0, 1]], [[1, 2], [3, 4]], 2);
@@ -424,12 +456,19 @@ r.post("/competitions/:id/questions/:questionId/answer", auth, async (req, res, 
                 isCorrect = true;
               }
             }
-          } catch {
-            isCorrect = false;
           }
         }
-      } else {
-        isCorrect = cleanUserAnswer.length > 20 && !cleanUserAnswer.includes("TODO");
+      } catch {
+        // Function evaluation threw an error
+      }
+
+      // Fallback evaluation if not evaluated by custom tester
+      if (!isCorrect) {
+        if (cleanCorrectAnswer && cleanUserAnswer.includes(cleanCorrectAnswer)) {
+          isCorrect = true;
+        } else if (cleanUserAnswer.length > 35 && !cleanUserAnswer.includes("todo") && !cleanUserAnswer.includes("// yechimingizni yozing")) {
+          isCorrect = true;
+        }
       }
     }
 
